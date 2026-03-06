@@ -665,6 +665,42 @@ A cell can pause the workflow by returning `:mycelium/halt` in its data. The wor
 - **Halt trace entry** — the trace entry for the halting cell has `:halted true`
 - **Resume validation** — calling `resume-compiled` on a non-halted result throws an exception
 
+### Persistent Store
+
+For workflows that halt across process restarts or sessions, use the `WorkflowStore` protocol to persist and retrieve halted state:
+
+```clojure
+(require '[mycelium.store :as store])
+
+;; In-memory store (dev/testing)
+(def s (store/memory-store))
+
+;; Run — auto-persists on halt, returns {:mycelium/session-id id, :mycelium/halt context}
+(def halted (store/run-with-store compiled resources initial-data s))
+
+;; Resume by session ID — loads from store, resumes, cleans up on completion
+(def result (store/resume-with-store compiled resources (:mycelium/session-id halted) s))
+
+;; Resume with human input
+(store/resume-with-store compiled resources session-id s {:approved true})
+```
+
+Implement the protocol for your persistence backend (DB, Redis, etc.):
+
+```clojure
+(defrecord MyStore [conn]
+  store/WorkflowStore
+  (save-workflow! [_ session-id data] ...)
+  (load-workflow [_ session-id] ...)
+  (delete-workflow! [_ session-id] ...)
+  (list-workflows [_] ...))
+```
+
+- On halt: state persisted, `:mycelium/session-id` returned (`:mycelium/resume` hidden from caller)
+- On resume completion: state deleted from store automatically
+- On re-halt: store updated with new state, same session ID reused
+- Custom session IDs: `(store/run-with-store compiled res data s {:session-id "my-id"})`
+
 ## Workflow Result Keys
 
 | Key | Description |
@@ -679,3 +715,4 @@ A cell can pause the workflow by returning `:mycelium/halt` in its data. The wor
 | `:mycelium/child-trace` | Nested workflow trace (composed cells) |
 | `:mycelium/halt` | Halt context (true or map) — present when workflow is halted |
 | `:mycelium/resume` | Resume state token — present when workflow is halted |
+| `:mycelium/session-id` | Store session ID — present when using `run-with-store`/`resume-with-store` on halt |

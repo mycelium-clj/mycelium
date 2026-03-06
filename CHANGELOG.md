@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-03-06
+
+### WorkflowStore Persistence Protocol
+
+Formal persistence layer for halt/resume. `WorkflowStore` protocol with `save-workflow!`, `load-workflow`, `delete-workflow!`, `list-workflows`. Includes an in-memory implementation for dev/testing. Store-aware helpers (`run-with-store`, `resume-with-store`) auto-persist on halt, auto-delete on completion, and reuse session IDs across re-halts.
+
+```clojure
+(def s (store/memory-store))
+(def halted (store/run-with-store compiled resources data s))
+(store/resume-with-store compiled resources (:mycelium/session-id halted) s {:approved true})
+```
+
 ## 2026-03-05
 
 ### Error Groups

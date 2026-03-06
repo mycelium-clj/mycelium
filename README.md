@@ -463,6 +463,24 @@ Key behaviors:
 - If the halting cell dispatches to a branch, resume continues on the correct branch
 - Calling `resume-compiled` on a non-halted result throws an exception
 
+### Persistent Store
+
+For workflows that halt across process restarts, use the `WorkflowStore` protocol to auto-persist halted state:
+
+```clojure
+(require '[mycelium.store :as store])
+
+(def s (store/memory-store))  ;; or your DB/Redis implementation
+
+;; Run — persists on halt, returns {:mycelium/session-id id}
+(def halted (store/run-with-store compiled resources initial-data s))
+
+;; Resume by session ID — loads from store, cleans up on completion
+(store/resume-with-store compiled resources (:mycelium/session-id halted) s {:approved true})
+```
+
+Implement `WorkflowStore` for your backend — the protocol has four methods: `save-workflow!`, `load-workflow`, `delete-workflow!`, `list-workflows`.
+
 ## Constraints
 
 Declare compile-time path invariants that are checked against all enumerated workflow paths:

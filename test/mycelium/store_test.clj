@@ -178,6 +178,35 @@
       (is (thrown-with-msg? Exception #"not found"
             (store/resume-with-store compiled {} "nonexistent" s))))))
 
+(deftest run-with-store-custom-session-id-test
+  (testing "Custom session ID via opts"
+    (defmethod cell/cell-spec :store/custom-sid [_]
+      {:id :store/custom-sid
+       :handler (fn [_ data] (assoc data :done true :mycelium/halt true))
+       :schema {:input [:map] :output [:map]}})
+
+    (let [s (store/memory-store)
+          compiled (myc/pre-compile
+                     {:cells {:start :store/custom-sid}
+                      :edges {:start :end}})
+          result (store/run-with-store compiled {} {} s {:session-id "my-session"})]
+      (is (= "my-session" (:mycelium/session-id result)))
+      (is (some? (store/load-workflow s "my-session"))))))
+
+(deftest run-with-store-error-not-persisted-test
+  (testing "Errored workflow throws and nothing is persisted"
+    (defmethod cell/cell-spec :store/err-cell [_]
+      {:id :store/err-cell
+       :handler (fn [_ _data] (throw (ex-info "boom" {})))
+       :schema {:input [:map] :output [:map]}})
+
+    (let [s (store/memory-store)
+          compiled (myc/pre-compile
+                     {:cells {:start :store/err-cell}
+                      :edges {:start :end}})]
+      (is (thrown? Exception (store/run-with-store compiled {} {} s)))
+      (is (empty? (store/list-workflows s)) "Nothing persisted"))))
+
 ;; ===== Round 7: Custom store via reify =====
 
 (deftest custom-store-protocol-test
