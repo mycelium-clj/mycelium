@@ -148,7 +148,8 @@
                 ;; Skip output validation when resilience error or timeout is present
                 ;; (the handler was short-circuited)
                 error      (when-not (or (:mycelium/resilience-error data)
-                                         (:mycelium/timeout data))
+                                         (:mycelium/timeout data)
+                                         (:mycelium/error data))
                              (validate-output cell data transition))
                 ;; Extract duration-ms from the latest Maestro trace segment
                 duration-ms (some-> (:trace fsm-state) last :duration-ms)

@@ -162,6 +162,28 @@ Move timeout logic from handlers to the workflow definition. When a cell exceeds
 - Trace entries include `:timeout? true` when a cell times out
 - Distinct from resilience `:timeout` policies — graph timeouts **route**, resilience timeouts **error**
 
+### Error Groups
+
+Declare shared error handling for sets of cells. If any cell in the group throws, the framework catches the exception, injects `:mycelium/error` into data, and routes to the group's error handler:
+
+```clojure
+{:cells {:fetch     :data/fetch
+         :transform :data/transform
+         :err       :data/handle-error}
+ :edges {:fetch     :transform
+         :transform :end
+         :err       :end}
+ :error-groups {:pipeline {:cells [:fetch :transform]
+                            :on-error :err}}}
+```
+
+- At compile time, unconditional edges are expanded to map edges with `:on-error` target
+- `:on-error` dispatch predicate is auto-injected and evaluated first
+- `:mycelium/error` contains `{:cell :cell-name, :message "..."}` — available to the error handler
+- Output schema validation is skipped for errored cells
+- Error handler cells can `dissoc :mycelium/error` to clean up
+- Grouped cells must exist, error handler must exist, no cell in multiple groups
+
 ## Join Nodes (Fork-Join)
 
 When multiple independent cells can run concurrently, declare a join node:
@@ -433,6 +455,7 @@ Declare compile-time path invariants that are checked against all enumerated pat
 - **Schema chain** — each cell's input keys must be available from upstream outputs (join-aware)
 - **Constraints** — path invariants checked against all enumerated paths (see Constraints)
 - **Graph timeouts** — timeout cells exist, values are positive integers, cells have `:timeout` edge
+- **Error groups** — grouped cells exist, error handler exists, no cell in multiple groups
 - **Resilience validation** — policy keys valid, referenced cells exist, timeout-ms positive
 - **Join validation** — member cells exist, no name collisions, members have no edges, output keys disjoint (or `:merge-fn` provided)
 
@@ -651,6 +674,7 @@ A cell can pause the workflow by returning `:mycelium/halt` in its data. The wor
 | `:mycelium/schema-error` | Runtime schema violation details |
 | `:mycelium/join-error` | Join node error details |
 | `:mycelium/timeout` | `true` when a cell exceeded its graph-level timeout |
+| `:mycelium/error` | Error group error details (`{:cell :name, :message "..."}`) |
 | `:mycelium/resilience-error` | Resilience policy trigger details (`:type`, `:cell`, `:message`) |
 | `:mycelium/child-trace` | Nested workflow trace (composed cells) |
 | `:mycelium/halt` | Halt context (true or map) — present when workflow is halted |

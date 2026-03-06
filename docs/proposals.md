@@ -160,9 +160,9 @@ The existing `cell-brief` and `orchestrate` module scope context per-cell well. 
 
 ---
 
-## 5. Overlapping States (Shared Error Handling)
+## ~~5. Overlapping States (Shared Error Handling)~~ (Implemented)
 
-**Value: Medium | Feasibility: Medium**
+**Value: Medium | Feasibility: Medium** — **DONE**
 
 The gap: "if ANY cell in this set fails, route to this handler" without wiring `:on-error` individually. Between fragments, interceptors, and the existing `:on-error` manifest field, most use cases are covered. This proposal targets the remaining gap.
 
@@ -217,7 +217,7 @@ Interceptors already fill this role. Workflow-level interceptors with `:pre`/`:p
 | Done | Global constraints | Medium | `enumerate-paths` (exists) |
 | Done | Graph-level timeouts | Medium | None (reuses join timeout pattern) |
 | Done | Region briefs | Small | None |
-| Deferred | Error groups | Small | None |
+| Done | Error groups | Small | None |
 | Skip | Edge actions | - | Covered by interceptors |
 
 **Recommended sequence**: Default transitions first (quick win, pairs well with halt/resume for safety), then global constraints (highest architectural value), then graph-level timeouts.

@@ -150,6 +150,25 @@ Move timeout logic from handlers to the workflow definition. When a cell exceeds
 
 The `:timeout` dispatch is auto-injected and evaluated first (before user predicates and `:default`). This is distinct from resilience `:timeout` policies — graph timeouts **route** to an alternative cell, resilience timeouts produce `:mycelium/resilience-error`.
 
+### Error Groups
+
+Declare shared error handling across sets of cells. If any cell in the group throws, the framework catches the exception, injects `:mycelium/error` into data, and routes to the group's error handler:
+
+```clojure
+(myc/run-workflow
+  {:cells {:fetch     :data/fetch
+           :transform :data/transform
+           :err       :data/handle-error}
+   :edges {:fetch     :transform
+           :transform :end
+           :err       :end}
+   :error-groups {:pipeline {:cells [:fetch :transform]
+                              :on-error :err}}}
+  {} {})
+```
+
+This is syntactic sugar — each grouped cell gets an `:on-error` edge and dispatch predicate injected at compile time. The error handler receives `:mycelium/error` with `{:cell :cell-name, :message "..."}`.
+
 ### Per-Transition Output Schemas
 
 Cells with multiple outgoing edges can declare different output schemas for each transition:
@@ -474,6 +493,7 @@ Declare compile-time path invariants that are checked against all enumerated wor
 - **Schema chain** — each cell's input keys must be available from upstream outputs (join-aware: validates member inputs and accumulates union of member outputs)
 - **Constraints** — path invariants checked against all enumerated paths
 - **Graph timeouts** — timeout cells exist, values are positive integers, cells have `:timeout` edge
+- **Error groups** — grouped cells exist, error handler exists, no cell in multiple groups
 - **Resilience validation** — policy keys are valid, referenced cells exist, timeout-ms is positive
 - **Join validation** — member cells exist, no name collisions with cells, members have no edges, output keys are disjoint (or `:merge-fn` provided), strategy is valid, no cell appears in multiple joins
 - **Region validation** (manifest) — region cells exist, no cell in multiple regions

@@ -624,6 +624,121 @@
             state->cell
             timeouts)))
 
+;; ===== Error group expansion =====
+
+(defn- validate-error-groups!
+  "Validates :error-groups. Each group's cells must exist in :cells,
+   :on-error must reference a cell in :cells, and no cell may appear
+   in multiple groups."
+  [error-groups cells]
+  (let [cell-names (set (keys cells))
+        seen (atom {})]
+    (doseq [[group-name {:keys [cells on-error]}] error-groups]
+      (when-not (contains? cell-names on-error)
+        (throw (ex-info (str "error group " group-name " :on-error references nonexistent cell " on-error)
+                        {:group group-name :on-error on-error})))
+      (doseq [cell-name cells]
+        (when-not (contains? cell-names cell-name)
+          (throw (ex-info (str "error group " group-name " references nonexistent cell " cell-name)
+                          {:group group-name :cell cell-name})))
+        (when-let [other-group (get @seen cell-name)]
+          (throw (ex-info (str "Cell " cell-name " appears in multiple error groups: "
+                               other-group " and " group-name)
+                          {:cell cell-name :groups [other-group group-name]})))
+        (swap! seen assoc cell-name group-name)))))
+
+(defn- expand-error-group-edges
+  "Expands edges for cells in error groups. For cells with unconditional edges,
+   converts to map edge adding :on-error target. For cells with map edges,
+   adds :on-error entry if not already present."
+  [edges error-groups]
+  (let [cell->handler (into {}
+                        (mapcat (fn [[_ {:keys [cells on-error]}]]
+                                  (map (fn [c] [c on-error]) cells)))
+                        error-groups)]
+    (reduce (fn [acc [cell-name handler-name]]
+              (let [edge-def (get acc cell-name)]
+                (cond
+                  ;; No edge — shouldn't happen (validation catches), skip
+                  (nil? edge-def) acc
+                  ;; Unconditional edge → convert to map with :on-error
+                  (keyword? edge-def)
+                  (assoc acc cell-name {:done edge-def :on-error handler-name})
+                  ;; Map edge — add :on-error if not present
+                  (and (map? edge-def) (not (contains? edge-def :on-error)))
+                  (assoc acc cell-name (assoc edge-def :on-error handler-name))
+                  ;; Already has :on-error — leave as-is
+                  :else acc)))
+            edges
+            cell->handler)))
+
+(defn- inject-error-group-dispatches
+  "For cells in error groups, auto-injects an :on-error dispatch predicate
+   that checks for :mycelium/error. Also injects a :done predicate for cells
+   whose edges were expanded from unconditional to map."
+  [dispatches-map error-groups edges]
+  (let [cell->handler (into {}
+                        (mapcat (fn [[_ {:keys [cells on-error]}]]
+                                  (map (fn [c] [c on-error]) cells)))
+                        error-groups)]
+    (reduce (fn [acc [cell-name _]]
+              (let [dispatch-vec (get acc cell-name [])
+                    has-on-error? (some #(= :on-error (first %)) dispatch-vec)
+                    error-pred [:on-error (fn [d] (some? (:mycelium/error d)))]]
+                (if has-on-error?
+                  acc
+                  (let [;; If cell had unconditional edge (now expanded to {:done X :on-error Y}),
+                        ;; add [:done (constantly true)] if not present
+                        edge-def (get edges cell-name)
+                        has-done? (some #(= :done (first %)) dispatch-vec)
+                        needs-done? (and (map? edge-def) (contains? edge-def :done) (not has-done?))
+                        with-done (if needs-done?
+                                    (conj (vec dispatch-vec) [:done (constantly true)])
+                                    dispatch-vec)
+                        ;; Insert :on-error first so it takes priority
+                        {defaults true others false} (group-by #(= :default (first %)) with-done)]
+                    (assoc acc cell-name (vec (concat [error-pred] others defaults)))))))
+            (or dispatches-map {})
+            cell->handler)))
+
+(defn- wrap-handler-with-error-catch
+  "Wraps a cell handler with try/catch. On error, returns data with
+   :mycelium/error {:cell cell-name, :message msg}.
+   Handles both sync (2-arity) and async (4-arity) handlers."
+  [handler cell-name async?]
+  (let [make-error (fn [data e]
+                     (assoc data :mycelium/error
+                            {:cell    cell-name
+                             :message (or (ex-message e) (.toString e))}))]
+    (if async?
+      (fn [resources data callback error-callback]
+        (try
+          (handler resources data
+                   callback
+                   (fn [e] (callback (make-error data e))))
+          (catch Throwable e
+            (callback (make-error data e)))))
+      (fn [resources data]
+        (try
+          (handler resources data)
+          (catch Throwable e
+            (make-error data e)))))))
+
+(defn- apply-error-group-wrapping
+  "Wraps handlers of cells in error groups with try/catch error catching."
+  [state->cell error-groups]
+  (if (empty? error-groups)
+    state->cell
+    (let [grouped-cells (set (mapcat :cells (vals error-groups)))]
+      (reduce (fn [acc cell-name]
+                (let [state-id (resolve-state-id cell-name)]
+                  (if-let [cell (get acc state-id)]
+                    (assoc acc state-id
+                           (update cell :handler wrap-handler-with-error-catch cell-name (:async? cell)))
+                    acc)))
+              state->cell
+              grouped-cells))))
+
 ;; ===== Constraint validation =====
 
 (defn- enumerate-workflow-paths
@@ -727,46 +842,56 @@
   [{:keys [cells edges dispatches joins input-schema pipeline] :as raw-workflow}]
   (let [{:keys [cells edges dispatches joins input-schema]} (expand-pipeline raw-workflow)]
     (validate-cells-exist! cells)
-    ;; Validate :default edge usage (must not be sole edge)
-    (validate-default-edges! edges)
-    ;; Normalize to {name → cell-id} for all downstream validation
-    (let [cell-ids (cells->ids cells)]
-      ;; Validate :input-schema well-formedness if present
-      (when input-schema
-        (v/validate-malli-schema! input-schema "input-schema"))
-      ;; Validate :resilience policies if present
-      (when-let [resilience (:resilience raw-workflow)]
-        (resilience/validate-resilience! resilience cell-ids))
-      ;; Validate join definitions
-      (let [joins-map (or joins {})]
-        (when (seq joins-map)
-          (validate-join-defs! joins-map cell-ids edges)
-          (validate-join-output-conflicts! joins-map cell-ids))
-        ;; For edge-target and reachability validation, include join names as valid targets
-        (let [cell-names     (set (keys cell-ids))
-              join-names     (set (keys joins-map))
-              join-members   (set (mapcat :cells (vals joins-map)))
-              edge-cell-names (set/difference cell-names join-members)
-              valid-names    (set/union edge-cell-names join-names)]
-          (v/validate-edge-targets! edges valid-names)
-          (v/validate-reachability! edges valid-names))
-        ;; Merge default dispatches — include join default dispatches (filtered to match edge keys)
-        ;; Also auto-inject :default catch-all predicates
-        ;; Join dispatches take priority (merged last) since joins compute their own dispatches
-        (let [timeouts-map        (or (:timeouts raw-workflow) {})
-              with-timeouts      (inject-timeout-dispatches dispatches timeouts-map edges)
-              with-defaults      (inject-default-dispatches with-timeouts edges)
-              join-dispatches    (compute-join-dispatches joins-map edges)
-              effective-dispatches (merge (merge-default-dispatches with-defaults edges cell-ids)
-                                          join-dispatches)]
-          (v/validate-dispatch-coverage! edges effective-dispatches))
-        (validate-schema-chain! edges cell-ids joins-map)
-        ;; Validate graph-level timeouts
-        (when-let [timeouts (:timeouts raw-workflow)]
-          (validate-timeouts! timeouts cells edges))
-        ;; Validate constraints (after all structural validations pass)
-        (when-let [constraints (:constraints raw-workflow)]
-          (validate-constraints! constraints edges))))))
+    ;; Validate and expand error groups (must happen before edge/dispatch validation)
+    (let [error-groups (or (:error-groups raw-workflow) {})
+          _            (when (seq error-groups)
+                         (validate-error-groups! error-groups cells))
+          edges        (if (seq error-groups)
+                         (expand-error-group-edges edges error-groups)
+                         edges)
+          dispatches   (if (seq error-groups)
+                         (inject-error-group-dispatches dispatches error-groups edges)
+                         dispatches)]
+      ;; Validate :default edge usage (must not be sole edge)
+      (validate-default-edges! edges)
+      ;; Normalize to {name → cell-id} for all downstream validation
+      (let [cell-ids (cells->ids cells)]
+        ;; Validate :input-schema well-formedness if present
+        (when input-schema
+          (v/validate-malli-schema! input-schema "input-schema"))
+        ;; Validate :resilience policies if present
+        (when-let [resilience (:resilience raw-workflow)]
+          (resilience/validate-resilience! resilience cell-ids))
+        ;; Validate join definitions
+        (let [joins-map (or joins {})]
+          (when (seq joins-map)
+            (validate-join-defs! joins-map cell-ids edges)
+            (validate-join-output-conflicts! joins-map cell-ids))
+          ;; For edge-target and reachability validation, include join names as valid targets
+          (let [cell-names     (set (keys cell-ids))
+                join-names     (set (keys joins-map))
+                join-members   (set (mapcat :cells (vals joins-map)))
+                edge-cell-names (set/difference cell-names join-members)
+                valid-names    (set/union edge-cell-names join-names)]
+            (v/validate-edge-targets! edges valid-names)
+            (v/validate-reachability! edges valid-names))
+          ;; Merge default dispatches — include join default dispatches (filtered to match edge keys)
+          ;; Also auto-inject :default catch-all predicates
+          ;; Join dispatches take priority (merged last) since joins compute their own dispatches
+          (let [timeouts-map        (or (:timeouts raw-workflow) {})
+                with-timeouts      (inject-timeout-dispatches dispatches timeouts-map edges)
+                with-defaults      (inject-default-dispatches with-timeouts edges)
+                join-dispatches    (compute-join-dispatches joins-map edges)
+                effective-dispatches (merge (merge-default-dispatches with-defaults edges cell-ids)
+                                            join-dispatches)]
+            (v/validate-dispatch-coverage! edges effective-dispatches))
+          (validate-schema-chain! edges cell-ids joins-map)
+          ;; Validate graph-level timeouts
+          (when-let [timeouts (:timeouts raw-workflow)]
+            (validate-timeouts! timeouts cells edges))
+          ;; Validate constraints (after all structural validations pass)
+          (when-let [constraints (:constraints raw-workflow)]
+            (validate-constraints! constraints edges)))))))
 
 ;; ===== Workflow-level interceptor matching =====
 
@@ -886,7 +1011,15 @@
    (let [{:keys [cells edges dispatches joins] :as workflow} (expand-pipeline raw-workflow)]
      ;; Validate
      (validate-workflow workflow)
-     (let [;; Normalize cells to {name → cell-id} for compilation
+     (let [;; Expand error groups (edges + dispatches) before other processing
+           error-groups (or (:error-groups workflow) {})
+           edges        (if (seq error-groups)
+                          (expand-error-group-edges edges error-groups)
+                          edges)
+           dispatches   (if (seq error-groups)
+                          (inject-error-group-dispatches dispatches error-groups edges)
+                          dispatches)
+           ;; Normalize cells to {name → cell-id} for compilation
            cell-ids (cells->ids cells)
            cell-params (cells->params cells)
            joins-map (or joins {})
@@ -946,6 +1079,8 @@
                        state->cell)
          ;; Apply graph-level timeouts (wraps handlers with timeout logic)
          state->cell (apply-graph-timeouts state->cell timeouts-map)
+         ;; Apply error group wrapping (try/catch → :mycelium/error)
+         state->cell (apply-error-group-wrapping state->cell error-groups)
          ;; Apply workflow-level interceptors (wraps cell handlers)
          wf-interceptors (:interceptors workflow)
          state->cell (apply-workflow-interceptors state->cell cell-ids wf-interceptors)
