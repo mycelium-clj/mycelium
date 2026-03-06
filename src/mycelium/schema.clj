@@ -185,7 +185,7 @@
               :else
               (-> fsm-state
                   (update-in [:data :mycelium/trace] (fnil conj []) trace-entry)
-                  (update :data dissoc :mycelium/join-traces :mycelium/params))))
+                  (update :data dissoc :mycelium/join-traces :mycelium/params :mycelium/timeout))))
           fsm-state)))))
 
 (defn wrap-async-callback

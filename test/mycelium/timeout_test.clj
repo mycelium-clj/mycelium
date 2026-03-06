@@ -13,6 +13,11 @@
       :handler handler
       :schema {:input [:map] :output [:map]}})))
 
+(defn- timed-out?
+  "Checks if any trace entry has :timeout? true."
+  [result]
+  (some :timeout? (:mycelium/trace result)))
+
 ;; ===== Round 1: Basic timeout routing =====
 
 (deftest basic-timeout-routing-test
@@ -33,8 +38,8 @@
                     :dispatches {:start [[:done (constantly true)]]}
                     :timeouts {:start 50}}
                    {} {})]
-      (is (true? (:mycelium/timeout result))
-          "Timeout flag is injected into data")
+      (is (timed-out? result)
+          "Timeout recorded in trace")
       (is (true? (:c/fallback result))
           "Fallback cell ran")
       (is (nil? (:c/unreachable result))
@@ -57,8 +62,8 @@
                    {} {})]
       (is (= "fast" (:result result))
           "Handler result is present")
-      (is (nil? (:mycelium/timeout result))
-          "No timeout flag"))))
+      (is (not (timed-out? result))
+          "No timeout in trace"))))
 
 ;; ===== Round 3: Validation — timeout value must be positive integer =====
 
@@ -137,7 +142,7 @@
                     :dispatches {:start [[:done (constantly true)]]}
                     :timeouts {:start 50}}
                    {} {})]
-      (is (true? (:mycelium/timeout result)))
+      (is (timed-out? result))
       (is (true? (:c/async-fallback result))))))
 
 ;; ===== Round 7: Timeout dispatch auto-injection =====
@@ -157,7 +162,7 @@
                     :dispatches {:start [[:done (fn [d] (not (:mycelium/timeout d)))]]}
                     :timeouts {:start 50}}
                    {} {})]
-      (is (true? (:mycelium/timeout result))))))
+      (is (timed-out? result)))))
 
 ;; ===== Round 8: Timeout with :default edge =====
 
@@ -178,7 +183,7 @@
                                                              (:result d)))]]}
                     :timeouts {:start 50}}
                    {} {})]
-      (is (true? (:mycelium/timeout result)))
+      (is (timed-out? result))
       (is (true? (:c/fallback8 result))
           ":timeout routes before :default"))))
 
@@ -225,7 +230,7 @@
                     :timeouts {:start 5000, :next 50}}
                    {} {})]
       (is (= "ok" (:first result)) "First cell completes normally")
-      (is (true? (:mycelium/timeout result)) "Second cell times out")
+      (is (timed-out? result) "Second cell times out (recorded in trace)")
       (is (true? (:c/fallback10 result)) "Routes to fallback"))))
 
 ;; ===== Round 11: Timeout skips output schema validation =====
@@ -248,7 +253,51 @@
                     :dispatches {:start [[:done (fn [d] (not (:mycelium/timeout d)))]]}
                     :timeouts {:start 50}}
                    {} {})]
-      (is (true? (:mycelium/timeout result))
+      (is (timed-out? result)
           "Timeout fires")
       (is (nil? (:mycelium/schema-error result))
           "No schema error despite missing :required-key"))))
+
+;; ===== Round 12: Stale :mycelium/timeout flag is cleaned up =====
+
+(deftest timeout-flag-cleared-for-downstream-test
+  (testing ":mycelium/timeout is cleared after routing so downstream cells don't see it"
+    (make-cell :c/slow12 (fn [_ data]
+                           (Thread/sleep 200)
+                           (assoc data :slow-result "done")))
+    ;; Fallback also has a timeout — should NOT fire from stale flag
+    (make-cell :c/fallback12 (fn [_ data]
+                               (assoc data :fallback-result "recovered")))
+
+    (let [result (myc/run-workflow
+                   {:cells {:start :c/slow12
+                            :fallback :c/fallback12
+                            :oops :c/fallback12}
+                    :edges {:start {:done :end, :timeout :fallback}
+                            :fallback {:done :end, :timeout :oops}
+                            :oops :end}
+                    :dispatches {:start    [[:done (fn [d] (not (:mycelium/timeout d)))]]
+                                 :fallback [[:done (fn [d] (not (:mycelium/timeout d)))]]}
+                    :timeouts {:start 50, :fallback 5000}}
+                   {} {})]
+      (is (= "recovered" (:fallback-result result))
+          "Fallback cell completes normally")
+      (is (nil? (:mycelium/timeout result))
+          "Timeout flag is cleaned up after routing"))))
+
+;; ===== Round 13: Handler exception propagates through timeout wrapper =====
+
+(deftest timeout-handler-exception-propagates-test
+  (testing "If handler throws within timeout window, exception propagates normally"
+    (make-cell :c/explode (fn [_ _data]
+                            (throw (ex-info "boom" {:reason :test}))))
+
+    ;; Maestro catches the exception and routes to ::error, wrapping as "execution error".
+    ;; The original "boom" is nested as the cause.
+    (is (thrown? Exception
+          (myc/run-workflow
+            {:cells {:start :c/explode}
+             :edges {:start {:done :end, :timeout :end}}
+             :dispatches {:start [[:done (constantly true)]]}
+             :timeouts {:start 5000}}
+            {} {})))))
