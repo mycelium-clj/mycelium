@@ -66,17 +66,21 @@
   "Compiles edge definitions into Maestro dispatch pairs.
    If edges is a keyword → unconditional dispatch to that target.
    If edges is a map → uses dispatch-vec (vector of [label pred] pairs) to
-   produce ordered [[target pred] ...] matching Maestro's format."
+   produce ordered [[target pred] ...] matching Maestro's format.
+   :default dispatches are always placed last to ensure catch-all semantics."
   [edges dispatch-vec]
   (if (keyword? edges)
     [[(resolve-state-id edges) (constantly true)]]
-    (mapv (fn [[label pred]]
-            (let [target (get edges label)]
-              (when-not target
-                (throw (ex-info (str "No edge target for dispatch label " label)
-                                {:label label})))
-              [(resolve-state-id target) pred]))
-          dispatch-vec)))
+    (let [;; Partition into non-default and default, then concat so :default is last
+          {defaults true others false} (group-by #(= :default (first %)) dispatch-vec)
+          ordered (concat others defaults)]
+      (mapv (fn [[label pred]]
+              (let [target (get edges label)]
+                (when-not target
+                  (throw (ex-info (str "No edge target for dispatch label " label)
+                                  {:label label})))
+                [(resolve-state-id target) pred]))
+            ordered))))
 
 ;; ===== Schema key utilities =====
 
@@ -508,8 +512,9 @@
 
 (defn- compute-join-dispatches
   "Computes effective dispatches for join nodes, filtering join-default-dispatches
-   to only include labels that match existing edge keys. Returns a dispatches map
-   keyed by join name."
+   to only include labels that match existing edge keys. Also appends a :default
+   catch-all predicate if the join's edge map contains a :default target.
+   Returns a dispatches map keyed by join name."
   [joins-map edges]
   (reduce (fn [acc [join-name _]]
             (let [edge-def (get edges join-name)]
@@ -518,9 +523,13 @@
                 (let [edge-keys (set (keys edge-def))
                       filtered  (filterv (fn [[label _]]
                                            (contains? edge-keys label))
-                                         join-default-dispatches)]
-                  (if (seq filtered)
-                    (assoc acc join-name filtered)
+                                         join-default-dispatches)
+                      ;; Append :default catch-all if edge map has :default target
+                      with-default (if (contains? edge-def :default)
+                                     (conj (vec filtered) [:default (constantly true)])
+                                     filtered)]
+                  (if (seq with-default)
+                    (assoc acc join-name with-default)
                     acc))
                 acc)))
           {}
@@ -557,10 +566,11 @@
           (v/validate-reachability! edges valid-names))
         ;; Merge default dispatches — include join default dispatches (filtered to match edge keys)
         ;; Also auto-inject :default catch-all predicates
-        (let [join-dispatches    (compute-join-dispatches joins-map edges)
-              with-defaults      (inject-default-dispatches dispatches edges)
-              effective-dispatches (merge join-dispatches
-                                          (merge-default-dispatches with-defaults edges cell-ids))]
+        ;; Join dispatches take priority (merged last) since joins compute their own dispatches
+        (let [with-defaults      (inject-default-dispatches dispatches edges)
+              join-dispatches    (compute-join-dispatches joins-map edges)
+              effective-dispatches (merge (merge-default-dispatches with-defaults edges cell-ids)
+                                          join-dispatches)]
           (v/validate-dispatch-coverage! edges effective-dispatches))
         (validate-schema-chain! edges cell-ids joins-map)))))
 
@@ -690,10 +700,11 @@
          join-members (set (mapcat :cells (vals joins-map)))
          ;; Merge default dispatches from cell specs AND join default dispatches (filtered to edge keys)
          ;; Also auto-inject :default catch-all predicates
-         join-dispatches    (compute-join-dispatches joins-map edges)
+         ;; Join dispatches take priority (merged last) since joins compute their own dispatches
          with-defaults      (inject-default-dispatches dispatches edges)
-         effective-dispatches (merge join-dispatches
-                                     (merge-default-dispatches with-defaults edges cell-ids))
+         join-dispatches    (compute-join-dispatches joins-map edges)
+         effective-dispatches (merge (merge-default-dispatches with-defaults edges cell-ids)
+                                     join-dispatches)
          ;; Build state->cell map for non-join-member cells
          state->cell (into {}
                            (keep (fn [[cell-name cell-id]]

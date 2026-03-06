@@ -207,3 +207,75 @@
                                          [:default (fn [_] true)]]}}
                    {} {})]
       (is (= "b" (:result result))))))
+
+;; ===== Round 9: Default placed first in dispatches still fires last =====
+
+(deftest default-first-in-dispatches-still-fires-last-test
+  (testing ":default is reordered to last even if user puts it first in :dispatches"
+    (defmethod cell/cell-spec :dt9/step [_]
+      {:id      :dt9/step
+       :handler (fn [_ data] (assoc data :x 1))
+       :schema  {:input [:map] :output [:map [:x :int]]}})
+    (defmethod cell/cell-spec :dt9/a [_]
+      {:id      :dt9/a
+       :handler (fn [_ data] (assoc data :result "a"))
+       :schema  {:input [:map] :output [:map [:result :string]]}})
+    (defmethod cell/cell-spec :dt9/b [_]
+      {:id      :dt9/b
+       :handler (fn [_ data] (assoc data :result "b"))
+       :schema  {:input [:map] :output [:map [:result :string]]}})
+
+    ;; :default listed FIRST but :success matches, so :success should win
+    (let [result (myc/run-workflow
+                   {:cells {:start :dt9/step
+                            :a     :dt9/a
+                            :b     :dt9/b}
+                    :edges {:start {:success :a, :default :b}
+                            :a :end, :b :end}
+                    :dispatches {:start [[:default (fn [_] true)]
+                                         [:success (fn [_] true)]]}}
+                   {} {})]
+      (is (= "a" (:result result)) ":success should win even though :default was listed first"))))
+
+;; ===== Round 10: Default on join node =====
+
+(deftest default-on-join-node-test
+  (testing ":default edge on a join node acts as catch-all"
+    (defmethod cell/cell-spec :dt10/branch-a [_]
+      {:id      :dt10/branch-a
+       :handler (fn [_ data] (assoc data :a-result 1))
+       :schema  {:input [:map] :output [:map [:a-result :int]]}})
+    (defmethod cell/cell-spec :dt10/branch-b [_]
+      {:id      :dt10/branch-b
+       :handler (fn [_ data] (assoc data :b-result 2))
+       :schema  {:input [:map] :output [:map [:b-result :int]]}})
+    (defmethod cell/cell-spec :dt10/after [_]
+      {:id      :dt10/after
+       :handler (fn [_ data] (assoc data :sum (+ (:a-result data) (:b-result data))))
+       :schema  {:input [:map [:a-result :int] [:b-result :int]] :output [:map [:sum :int]]}})
+    (defmethod cell/cell-spec :dt10/fallback [_]
+      {:id      :dt10/fallback
+       :handler (fn [_ data] (assoc data :fell-back true))
+       :schema  {:input [:map] :output [:map [:fell-back :boolean]]}})
+    (defmethod cell/cell-spec :dt10/start [_]
+      {:id      :dt10/start
+       :handler (fn [_ data] data)
+       :schema  {:input [:map] :output [:map]}})
+
+    ;; Join succeeds → :done route. But if we only wire :default (no :done),
+    ;; the join's default dispatch for :done won't match any edge, so :default catches.
+    (let [result (myc/run-workflow
+                   {:cells {:start     :dt10/start
+                            :branch-a  :dt10/branch-a
+                            :branch-b  :dt10/branch-b
+                            :after     :dt10/after
+                            :fallback  :dt10/fallback}
+                    :joins {:gather {:cells [:branch-a :branch-b]
+                                     :strategy :parallel}}
+                    :edges {:start   :gather
+                            :gather  {:done :after, :default :fallback}
+                            :after   :end
+                            :fallback :end}}
+                   {} {})]
+      ;; Join succeeds, :done matches, should route to :after
+      (is (= 3 (:sum result))))))
