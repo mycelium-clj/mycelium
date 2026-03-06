@@ -3,9 +3,47 @@
   (:require [clojure.set :as set]
             [clojure.string :as str]
             [mycelium.cell :as cell]
+            [mycelium.resilience :as resilience]
             [mycelium.schema :as schema]
             [mycelium.validation :as v]
             [maestro.core :as fsm]))
+
+;; ===== Cell reference normalization =====
+
+(defn- normalize-cell-ref
+  "Normalizes a cell reference to {:id cell-id, :params params-map-or-nil}.
+   Accepts either a keyword (bare cell-id) or a map with :id and optional :params."
+  [cell-name cell-ref]
+  (cond
+    (keyword? cell-ref)
+    {:id cell-ref :params nil}
+
+    (and (map? cell-ref) (:id cell-ref))
+    {:id (:id cell-ref) :params (:params cell-ref)}
+
+    (map? cell-ref)
+    (throw (ex-info (str "Cell " cell-name " map ref missing :id")
+                    {:cell-name cell-name :cell-ref cell-ref}))
+
+    :else
+    (throw (ex-info (str "Cell " cell-name " has invalid ref type: " (type cell-ref))
+                    {:cell-name cell-name :cell-ref cell-ref}))))
+
+(defn- cells->ids
+  "Extracts a {cell-name → cell-id} map from cells, normalizing map refs."
+  [cells]
+  (into {} (map (fn [[cell-name cell-ref]]
+                  [cell-name (:id (normalize-cell-ref cell-name cell-ref))]))
+        cells))
+
+(defn- cells->params
+  "Extracts a {cell-name → params} map from cells, only for cells with params."
+  [cells]
+  (into {} (keep (fn [[cell-name cell-ref]]
+                   (let [{:keys [params]} (normalize-cell-ref cell-name cell-ref)]
+                     (when params
+                       [cell-name params]))))
+        cells))
 
 ;; ===== State ID resolution =====
 
@@ -325,10 +363,12 @@
 ;; ===== Validation =====
 
 (defn- validate-cells-exist!
-  "Checks all cells referenced in :cells exist in the registry."
+  "Checks all cells referenced in :cells exist in the registry.
+   Accepts both bare keyword and map cell refs."
   [cells]
-  (doseq [[_name cell-id] cells]
-    (cell/get-cell! cell-id)))
+  (doseq [[cell-name cell-ref] cells]
+    (let [{:keys [id]} (normalize-cell-ref cell-name cell-ref)]
+      (cell/get-cell! id))))
 
 (defn- merge-default-dispatches
   "Merges default dispatches from cell specs into the workflow dispatches.
@@ -463,31 +503,33 @@
   [{:keys [cells edges dispatches joins input-schema pipeline] :as raw-workflow}]
   (let [{:keys [cells edges dispatches joins input-schema]} (expand-pipeline raw-workflow)]
     (validate-cells-exist! cells)
-    ;; Validate :input-schema well-formedness if present
-    (when input-schema
-      (v/validate-malli-schema! input-schema "input-schema"))
-    ;; Validate join definitions
-    (let [joins-map (or joins {})]
-      (when (seq joins-map)
-        (validate-join-defs! joins-map cells edges)
-        (validate-join-output-conflicts! joins-map cells))
-      ;; For edge-target and reachability validation, include join names as valid targets
-      (let [cell-names     (set (keys cells))
-            join-names     (set (keys joins-map))
-            ;; Members consumed by joins should not be in edges but are valid cells
-            join-members   (set (mapcat :cells (vals joins-map)))
-            ;; Non-member cell names = cells that appear in edges
-            edge-cell-names (set/difference cell-names join-members)
-            ;; Valid names for edge targets = non-member cells + join names
-            valid-names    (set/union edge-cell-names join-names)]
-        (v/validate-edge-targets! edges valid-names)
-        (v/validate-reachability! edges valid-names))
-      ;; Merge default dispatches — include join default dispatches (filtered to match edge keys)
-      (let [join-dispatches    (compute-join-dispatches joins-map edges)
-            effective-dispatches (merge join-dispatches
-                                        (merge-default-dispatches dispatches edges cells))]
-        (v/validate-dispatch-coverage! edges effective-dispatches))
-      (validate-schema-chain! edges cells joins-map))))
+    ;; Normalize to {name → cell-id} for all downstream validation
+    (let [cell-ids (cells->ids cells)]
+      ;; Validate :input-schema well-formedness if present
+      (when input-schema
+        (v/validate-malli-schema! input-schema "input-schema"))
+      ;; Validate :resilience policies if present
+      (when-let [resilience (:resilience raw-workflow)]
+        (resilience/validate-resilience! resilience cell-ids))
+      ;; Validate join definitions
+      (let [joins-map (or joins {})]
+        (when (seq joins-map)
+          (validate-join-defs! joins-map cell-ids edges)
+          (validate-join-output-conflicts! joins-map cell-ids))
+        ;; For edge-target and reachability validation, include join names as valid targets
+        (let [cell-names     (set (keys cell-ids))
+              join-names     (set (keys joins-map))
+              join-members   (set (mapcat :cells (vals joins-map)))
+              edge-cell-names (set/difference cell-names join-members)
+              valid-names    (set/union edge-cell-names join-names)]
+          (v/validate-edge-targets! edges valid-names)
+          (v/validate-reachability! edges valid-names))
+        ;; Merge default dispatches — include join default dispatches (filtered to match edge keys)
+        (let [join-dispatches    (compute-join-dispatches joins-map edges)
+              effective-dispatches (merge join-dispatches
+                                          (merge-default-dispatches dispatches edges cell-ids))]
+          (v/validate-dispatch-coverage! edges effective-dispatches))
+        (validate-schema-chain! edges cell-ids joins-map)))))
 
 ;; ===== Workflow-level interceptor matching =====
 
@@ -519,6 +561,16 @@
     (contains? (set (:cells scope)) cell-name)
 
     :else false))
+
+(defn- wrap-handler-with-params
+  "Wraps a cell handler to inject :mycelium/params into data before invocation.
+   Handles both sync (2-arity) and async (4-arity) handlers."
+  [handler params]
+  (fn
+    ([resources data]
+     (handler resources (assoc data :mycelium/params params)))
+    ([resources data callback error-callback]
+     (handler resources (assoc data :mycelium/params params) callback error-callback))))
 
 (defn- apply-pres [data pres]
   (reduce (fn [d pre-fn] (pre-fn d)) data pres))
@@ -597,25 +649,28 @@
    (let [{:keys [cells edges dispatches joins] :as workflow} (expand-pipeline raw-workflow)]
      ;; Validate
      (validate-workflow workflow)
-     (let [joins-map (or joins {})
+     (let [;; Normalize cells to {name → cell-id} for compilation
+           cell-ids (cells->ids cells)
+           cell-params (cells->params cells)
+           joins-map (or joins {})
          ;; Determine which cells are consumed by joins
          join-members (set (mapcat :cells (vals joins-map)))
          ;; Merge default dispatches from cell specs AND join default dispatches (filtered to edge keys)
          join-dispatches    (compute-join-dispatches joins-map edges)
          effective-dispatches (merge join-dispatches
-                                     (merge-default-dispatches dispatches edges cells))
+                                     (merge-default-dispatches dispatches edges cell-ids))
          ;; Build state->cell map for non-join-member cells
          state->cell (into {}
                            (keep (fn [[cell-name cell-id]]
                                    (when-not (contains? join-members cell-name)
                                      [(resolve-state-id cell-name)
                                       (cell/get-cell! cell-id)])))
-                           cells)
+                           cell-ids)
          ;; Build synthetic join cell specs for state->cell
          join-cell-specs (into {}
                                (map (fn [[join-name join-def]]
-                                      (let [handler   (build-join-handler join-name join-def cells)
-                                            in-schema (build-join-input-schema join-def cells)]
+                                      (let [handler   (build-join-handler join-name join-def cell-ids)
+                                            in-schema (build-join-input-schema join-def cell-ids)]
                                         [(resolve-state-id join-name)
                                          {:id       (keyword "mycelium.join" (name join-name))
                                           :handler  handler
@@ -626,9 +681,32 @@
          state->cell (merge state->cell join-cell-specs)
          ;; Pre-compile all Malli schemas so interceptors use compiled objects
          state->cell (schema/pre-compile-schemas state->cell)
+         ;; Apply params wrapping for parameterized cells
+         state->cell (reduce (fn [acc [cell-name params]]
+                               (let [state-id (resolve-state-id cell-name)]
+                                 (if-let [cell (get acc state-id)]
+                                   (assoc acc state-id
+                                          (update cell :handler wrap-handler-with-params params))
+                                   acc)))
+                             state->cell
+                             cell-params)
+         ;; Apply resilience policies
+         resilience-map (:resilience workflow)
+         state->cell (if (seq resilience-map)
+                       (reduce (fn [acc [cell-name policies]]
+                                 (let [state-id (resolve-state-id cell-name)]
+                                   (if-let [cell (get acc state-id)]
+                                     (assoc acc state-id
+                                            (update cell :handler
+                                                    resilience/wrap-handler cell-name policies
+                                                    {:async? (:async? cell)}))
+                                     acc)))
+                               state->cell
+                               resilience-map)
+                       state->cell)
          ;; Apply workflow-level interceptors (wraps cell handlers)
          wf-interceptors (:interceptors workflow)
-         state->cell (apply-workflow-interceptors state->cell cells wf-interceptors)
+         state->cell (apply-workflow-interceptors state->cell cell-ids wf-interceptors)
          ;; Build state->edge-targets for post-interceptor transition lookup
          state->edge-targets (build-edge-targets edges)
          ;; Build state->names for human-readable trace entries
@@ -636,7 +714,7 @@
                        (into {}
                              (map (fn [[cell-name _]]
                                     [(resolve-state-id cell-name) cell-name]))
-                             cells)
+                             cell-ids)
                        (into {}
                              (map (fn [[join-name _]]
                                     [(resolve-state-id join-name) join-name]))
@@ -655,7 +733,7 @@
                                               :dispatches (compile-edges edge-def dispatch-vec)}
                                              (when (:async? cell)
                                                {:async? true}))]))))
-                               cells)
+                               cell-ids)
          ;; Build FSM states for joins (use interceptor-wrapped handlers from state->cell)
          fsm-join-states (into {}
                                (map (fn [[join-name _join-def]]

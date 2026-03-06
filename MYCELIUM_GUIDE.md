@@ -143,6 +143,35 @@ Run cells in parallel (or sequential), merge results:
 - Without `:merge-fn`, results are merged via `(apply merge data results)` — output keys must be disjoint
 - With `:merge-fn`: `(fn [data results-vec] -> merged-data)`
 
+## Parameterized Cells
+
+Reuse the same handler with different configuration:
+
+```clojure
+{:cells {:triple {:id :math/multiply :params {:factor 3}}
+         :double {:id :math/multiply :params {:factor 2}}}
+ :pipeline [:triple :double]}
+```
+
+Params are injected as `:mycelium/params` in data before the handler runs. Access via `(get-in data [:mycelium/params :factor])`. Cleaned up automatically after each step. Bare keywords still work as before.
+
+## Resilience Policies
+
+Wrap cells with resilience4j policies via `:resilience`:
+
+```clojure
+{:cells {:start :api/call, :fallback :ui/error}
+ :edges {:start {:done :end, :failed :fallback}, :fallback :end}
+ :dispatches {:start [[:failed (fn [d] (some? (:mycelium/resilience-error d)))]
+                       [:done   (fn [d] (nil? (:mycelium/resilience-error d)))]]}
+ :resilience {:start {:timeout {:timeout-ms 5000}
+                       :retry   {:max-attempts 3 :wait-ms 200}}}}
+```
+
+Available policies: `:timeout`, `:retry`, `:circuit-breaker`, `:bulkhead`, `:rate-limiter`. When triggered, data gets `:mycelium/resilience-error` (map with `:type`, `:cell`, `:message`). Use dispatch predicates to route to fallback cells.
+
+Stateful policies (circuit breaker, rate limiter) require `pre-compile` + `run-compiled`. `:async-timeout-ms` (default 30s) controls promise wait time for async cells.
+
 ## Manifests (EDN)
 
 Define workflows as data in `.edn` files:
@@ -224,6 +253,7 @@ Define workflows as data in `.edn` files:
 | Dispatch coverage | Every edge label has a predicate (and vice versa) |
 | Schema chain | Each cell's input keys available from upstream outputs |
 | Join validation | Members exist, no name collisions, disjoint outputs |
+| Resilience | Policy keys valid, referenced cells exist, timeout-ms positive |
 | No-path-to-end | No reachable state stuck without path to `:end` |
 
 ## File Layout
@@ -234,6 +264,7 @@ src/mycelium/
   cell.clj         Cell registry (multimethod)
   schema.clj       Malli pre/post interceptors
   workflow.clj      DSL → Maestro compiler
+  resilience.clj   resilience4j wrapper (timeout, retry, CB, bulkhead, rate limiter)
   compose.clj      Hierarchical workflow nesting
   manifest.clj     EDN manifest loading, cell briefs
   middleware.clj   Ring middleware
@@ -272,6 +303,7 @@ When you receive a cell brief (from `cell-brief`), implement it as:
 - Custom error handling: pass `:on-error (fn [resources fsm-state] -> data)` to `compile-workflow`
 - Composed cells set `:mycelium/error` on failure for parent dispatch routing
 - Join errors collected in `:mycelium/join-error`
+- Resilience errors in `:mycelium/resilience-error` — route to fallback cells via dispatch predicates
 
 ### Gotchas
 

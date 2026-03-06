@@ -517,3 +517,41 @@
            {:cells {:start :test/cell-a}
             :pipeline [:start :nonexistent]})))))
 
+;; ===== Parameterized cells =====
+
+(deftest parameterized-cell-compiles-test
+  (testing "Workflow with parameterized cell (map form) compiles"
+    (register-cells!)
+    (let [compiled (wf/compile-workflow
+                    {:cells {:start {:id :test/cell-a :params {:mode "fast"}}}
+                     :edges {:start :end}})]
+      (is (some? compiled)))))
+
+(deftest parameterized-cell-backward-compat-test
+  (testing "Bare keyword cell refs still compile (regression guard)"
+    (register-cells!)
+    (let [compiled (wf/compile-workflow
+                    {:cells {:start :test/cell-a}
+                     :edges {:start :end}})]
+      (is (some? compiled)))))
+
+(deftest parameterized-cell-missing-id-throws-test
+  (testing "Map cell ref without :id throws"
+    (register-cells!)
+    (is (thrown-with-msg? Exception #":id"
+          (wf/compile-workflow
+           {:cells {:start {:params {:x 1}}}
+            :edges {:start :end}})))))
+
+(deftest parameterized-cell-schema-chain-test
+  (testing "Parameterized cells participate in schema chain validation"
+    (register-cells!)
+    (let [compiled (wf/compile-workflow
+                    {:cells {:start  {:id :test/cell-a :params {:mode "fast"}}
+                             :step-b :test/cell-b}
+                     :edges {:start  {:success :step-b}
+                             :step-b {:done :end}}
+                     :dispatches {:start  [[:success (constantly true)]]
+                                  :step-b [[:done (constantly true)]]}})]
+      (is (some? compiled)))))
+

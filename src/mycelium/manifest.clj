@@ -287,26 +287,28 @@
    Returns {:cells ... :edges ... :dispatches ...} suitable for `workflow/compile-workflow`."
   [{:keys [cells edges dispatches] :as manifest}]
   (let [cells    (resolve-inherit-schemas cells)
-        cell-ids (into {}
-                       (map (fn [[cell-name cell-def]]
-                              (let [{:keys [id schema requires]} cell-def]
-                                (if (cell/get-cell id)
-                                  ;; Cell already registered — apply manifest metadata
-                                  (cell/set-cell-meta! id {:schema   schema
-                                                           :requires (or requires [])})
-                                  ;; Not registered — register stub handler with full spec
-                                  (let [stub {:id      id
-                                              :handler (fn [_ data] data)
-                                              :schema  schema
-                                              :requires (or requires [])
-                                              :doc     (:doc cell-def)}]
-                                    (.addMethod cell/cell-spec id (constantly stub))
-                                    stub))
-                                [cell-name id])))
-                       cells)]
-    (cond-> {:cells cell-ids
+        cell-refs (into {}
+                        (map (fn [[cell-name cell-def]]
+                               (let [{:keys [id schema requires params]} cell-def]
+                                 (if (cell/get-cell id)
+                                   (cell/set-cell-meta! id {:schema   schema
+                                                            :requires (or requires [])})
+                                   (let [stub {:id      id
+                                               :handler (fn [_ data] data)
+                                               :schema  schema
+                                               :requires (or requires [])
+                                               :doc     (:doc cell-def)}]
+                                     (.addMethod cell/cell-spec id (constantly stub))
+                                     stub))
+                                 ;; Emit map form when params present, bare keyword otherwise
+                                 [cell-name (if params
+                                              {:id id :params params}
+                                              id)])))
+                        cells)]
+    (cond-> {:cells cell-refs
              :edges edges}
       dispatches (assoc :dispatches dispatches)
       (:joins manifest) (assoc :joins (:joins manifest))
       (:input-schema manifest) (assoc :input-schema (:input-schema manifest))
-      (:interceptors manifest) (assoc :interceptors (:interceptors manifest)))))
+      (:interceptors manifest) (assoc :interceptors (:interceptors manifest))
+      (:resilience manifest) (assoc :resilience (:resilience manifest)))))

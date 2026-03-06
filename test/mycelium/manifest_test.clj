@@ -389,6 +389,81 @@
       (is (thrown-with-msg? Exception #"at least 1"
             (manifest/validate-manifest m))))))
 
+;; ===== Parameterized cells in manifest =====
+
+(deftest manifest-parameterized-cell-validates-test
+  (testing "Manifest with :params on a cell def passes validation"
+    (let [m {:id :test/param-wf
+             :cells {:start {:id       :test/pm-cell
+                              :schema   {:input [:map [:x :int]] :output [:map [:y :int]]}
+                              :params   {:multiplier 3}
+                              :on-error nil}}
+             :edges {:start :end}}]
+      (is (some? (manifest/validate-manifest m))))))
+
+(deftest manifest-parameterized-to-workflow-test
+  (testing "manifest->workflow passes params through to workflow cells map"
+    (let [m {:id :test/param-wf2
+             :cells {:start {:id       :test/pm-cell2
+                              :schema   {:input [:map [:x :int]] :output [:map [:y :int]]}
+                              :params   {:mode "fast"}
+                              :on-error nil}}
+             :edges {:start :end}}
+          wf-def (manifest/manifest->workflow m)
+          cell-ref (get-in wf-def [:cells :start])]
+      (is (map? cell-ref))
+      (is (= :test/pm-cell2 (:id cell-ref)))
+      (is (= {:mode "fast"} (:params cell-ref))))))
+
+(deftest manifest-parameterized-pipeline-e2e-test
+  (testing "Pipeline manifest with same cell-id, different params, runs correctly"
+    (defmethod cell/cell-spec :test/pm-adder [_]
+      {:id      :test/pm-adder
+       :handler (fn [_ data]
+                  (let [amount (get-in data [:mycelium/params :amount])
+                        k      (get-in data [:mycelium/params :output-key])]
+                    (assoc data k (+ (:x data) amount))))
+       :schema  {:input [:map [:x :int]] :output [:map]}})
+
+    (let [m {:id :test/param-pipeline
+             :pipeline [:start :step-b]
+             :cells {:start  {:id       :test/pm-adder
+                                :schema   :inherit
+                                :params   {:amount 10 :output-key :first}
+                                :on-error nil}
+                     :step-b {:id       :test/pm-adder
+                                :schema   :inherit
+                                :params   {:amount 100 :output-key :second}
+                                :on-error nil}}}
+          validated (manifest/validate-manifest m)
+          wf-def   (manifest/manifest->workflow validated)
+          result   (myc/run-workflow wf-def {} {:x 5})]
+      (is (= 15  (:first result)))
+      (is (= 105 (:second result))))))
+
+;; ===== Resilience in manifest =====
+
+(deftest manifest-resilience-validates-test
+  (testing "Manifest with :resilience passes validation"
+    (let [m {:id :test/res-wf
+             :cells {:start {:id       :test/res-cell
+                              :schema   {:input [:map [:x :int]] :output [:map [:y :int]]}
+                              :on-error nil}}
+             :edges {:start :end}
+             :resilience {:start {:timeout {:timeout-ms 5000}}}}]
+      (is (some? (manifest/validate-manifest m))))))
+
+(deftest manifest-resilience-to-workflow-test
+  (testing "manifest->workflow passes :resilience through"
+    (let [m {:id :test/res-wf2
+             :cells {:start {:id       :test/res-cell2
+                              :schema   {:input [:map [:x :int]] :output [:map [:y :int]]}
+                              :on-error nil}}
+             :edges {:start :end}
+             :resilience {:start {:retry {:max-attempts 3}}}}
+          wf-def (manifest/manifest->workflow m)]
+      (is (= {:start {:retry {:max-attempts 3}}} (:resilience wf-def))))))
+
 (deftest pipeline-e2e-run-test
   (testing "Pipeline manifest compiles and runs end-to-end"
     (defmethod cell/cell-spec :test/pipe-double [_]

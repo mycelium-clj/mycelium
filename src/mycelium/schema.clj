@@ -145,7 +145,10 @@
                              (get-in state->edge-targets
                                      [state-id (:current-state-id fsm-state)]))
                 data       (:data fsm-state)
-                error      (validate-output cell data transition)
+                ;; Skip output validation when resilience error is present
+                ;; (the handler was short-circuited by the resilience wrapper)
+                error      (when-not (:mycelium/resilience-error data)
+                             (validate-output cell data transition))
                 ;; Extract duration-ms from the latest Maestro trace segment
                 duration-ms (some-> (:trace fsm-state) last :duration-ms)
                 ;; Extract join sub-traces if present
@@ -160,12 +163,12 @@
             (if error
               (-> fsm-state
                   (update-in [:data :mycelium/trace] (fnil conj []) trace-entry)
-                  (update :data dissoc :mycelium/join-traces)
+                  (update :data dissoc :mycelium/join-traces :mycelium/params)
                   (assoc :current-state-id ::fsm/error)
                   (assoc-in [:data :mycelium/schema-error] error))
               (-> fsm-state
                   (update-in [:data :mycelium/trace] (fnil conj []) trace-entry)
-                  (update :data dissoc :mycelium/join-traces))))
+                  (update :data dissoc :mycelium/join-traces :mycelium/params))))
           fsm-state)))))
 
 (defn wrap-async-callback

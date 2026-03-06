@@ -1,6 +1,7 @@
 (ns mycelium.integration-test
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [mycelium.cell :as cell]
+            [mycelium.core :as myc]
             [mycelium.workflow :as wf]
             [maestro.core :as fsm]
             [promesa.core :as p]))
@@ -482,3 +483,62 @@
       (doseq [entry trace]
         (is (not (contains? (:data entry) :mycelium/trace))
             (str "Trace entry for " (:cell entry) " should not contain :mycelium/trace in :data"))))))
+
+;; ===== Parameterized cells =====
+
+(deftest parameterized-cell-receives-params-test
+  (testing "Handler receives :mycelium/params from workflow params"
+    (defmethod cell/cell-spec :int/param-multiply [_]
+      {:id      :int/param-multiply
+       :handler (fn [_ data]
+                  (let [mult (get-in data [:mycelium/params :multiplier])]
+                    (assoc data :result (* (:x data) mult))))
+       :schema  {:input  [:map [:x :int]]
+                 :output [:map [:result :int]]}})
+
+    (let [result (myc/run-workflow
+                  {:cells {:start {:id :int/param-multiply
+                                   :params {:multiplier 3}}}
+                   :edges {:start {:done :end}}
+                   :dispatches {:start [[:done (constantly true)]]}}
+                  {}
+                  {:x 10})]
+      (is (= 30 (:result result))))))
+
+(deftest parameterized-cell-same-handler-different-params-test
+  (testing "Same cell-id used twice with different params"
+    (defmethod cell/cell-spec :int/param-prefix [_]
+      {:id      :int/param-prefix
+       :handler (fn [_ data]
+                  (let [prefix (get-in data [:mycelium/params :prefix])
+                        k      (get-in data [:mycelium/params :output-key])]
+                    (assoc data k (str prefix "-" (:value data)))))
+       :schema  {:input  [:map [:value :string]]
+                 :output [:map]}})
+
+    (let [result (myc/run-workflow
+                  {:cells {:start  {:id :int/param-prefix
+                                    :params {:prefix "hello" :output-key :greeting}}
+                           :step-b {:id :int/param-prefix
+                                    :params {:prefix "goodbye" :output-key :farewell}}}
+                   :pipeline [:start :step-b]}
+                  {}
+                  {:value "world"})]
+      (is (= "hello-world" (:greeting result)))
+      (is (= "goodbye-world" (:farewell result))))))
+
+(deftest parameterized-cell-params-not-in-output-test
+  (testing ":mycelium/params is cleaned up from final result"
+    (defmethod cell/cell-spec :int/param-simple [_]
+      {:id      :int/param-simple
+       :handler (fn [_ data] (assoc data :done true))
+       :schema  {:input [:map] :output [:map [:done :boolean]]}})
+
+    (let [result (myc/run-workflow
+                  {:cells {:start {:id :int/param-simple
+                                   :params {:mode "fast"}}}
+                   :edges {:start :end}}
+                  {}
+                  {})]
+      (is (true? (:done result)))
+      (is (not (contains? result :mycelium/params))))))

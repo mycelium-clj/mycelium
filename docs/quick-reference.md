@@ -76,13 +76,15 @@ A cell can depend on data produced several steps earlier without special wiring 
 ## Workflow Definition
 
 ```clojure
-{:cells       {:start :cell/id, :step2 :cell/id2}
+{:cells       {:start :cell/id, :step2 :cell/id2}    ;; or {:id :cell/id :params {...}}
  :edges       {:start {:label :step2}, :step2 {:done :end}}
  :dispatches  {:start [[:label (fn [data] (:key data))]]
                :step2 [[:done (constantly true)]]}
  :joins       {:join-name {:cells [:a :b] :strategy :parallel}}  ;; optional
  :input-schema [:map [:key :type]]                                ;; optional
- :interceptors [{:id :x :scope :all :pre (fn [d] d)}]}           ;; optional
+ :interceptors [{:id :x :scope :all :pre (fn [d] d)}]            ;; optional
+ :resilience  {:start {:timeout {:timeout-ms 5000}}}              ;; optional
+}
 ```
 
 ### Pipeline Shorthand
@@ -222,6 +224,43 @@ Scope forms:
 
 Interceptor `:pre`/`:post` receive and return the `data` map (not fsm-state).
 
+## Parameterized Cells
+
+Reuse the same handler with different config by passing a map instead of a bare keyword:
+
+```clojure
+{:cells {:triple {:id :math/multiply :params {:factor 3}}
+         :double {:id :math/multiply :params {:factor 2}}}
+ :pipeline [:triple :double]}
+```
+
+Params are injected as `:mycelium/params` in the data map and cleaned up after each step. Access via `(get-in data [:mycelium/params :factor])`.
+
+## Resilience Policies
+
+Wrap cells with [resilience4j](https://github.com/resilience4j/resilience4j) policies via `:resilience`:
+
+```clojure
+{:cells {:start :api/call, :fallback :ui/error}
+ :edges {:start {:done :end, :failed :fallback}, :fallback :end}
+ :dispatches {:start [[:failed (fn [d] (some? (:mycelium/resilience-error d)))]
+                       [:done   (fn [d] (nil? (:mycelium/resilience-error d)))]]}
+ :resilience {:start {:timeout        {:timeout-ms 5000}
+                       :retry          {:max-attempts 3 :wait-ms 200}
+                       :circuit-breaker {:failure-rate 50 :minimum-calls 10
+                                         :sliding-window-size 100 :wait-in-open-ms 60000}
+                       :bulkhead       {:max-concurrent 25 :max-wait-ms 0}
+                       :rate-limiter   {:limit-for-period 50
+                                        :limit-refresh-period-ms 500 :timeout-ms 5000}
+                       :async-timeout-ms 30000}}}
+```
+
+When triggered, handler returns data with `:mycelium/resilience-error` (map with `:type`, `:cell`, `:message`). Error types: `:timeout`, `:circuit-open`, `:bulkhead-full`, `:rate-limited`, `:unknown`.
+
+Stateful policies (circuit breaker, rate limiter) require `pre-compile` + `run-compiled` to share state across calls.
+
+`:async-timeout-ms` controls how long the resilience wrapper waits for an async handler's promise (default 30s). Independent of the resilience4j `:timeout` policy.
+
 ## Manifest Loading
 
 ```clojure
@@ -324,6 +363,7 @@ Per-transition schemas are validated based on which dispatch matched. The schema
 - **Reachability** — every cell and join must be reachable from `:start`
 - **Dispatch coverage** — every edge label must have a dispatch predicate, and vice versa
 - **Schema chain** — each cell's input keys must be available from upstream outputs (join-aware)
+- **Resilience validation** — policy keys valid, referenced cells exist, timeout-ms positive
 - **Join validation** — member cells exist, no name collisions, members have no edges, output keys disjoint (or `:merge-fn` provided)
 
 ## Edge Targets
@@ -475,4 +515,5 @@ Every run produces `:mycelium/trace` — a vector of step-by-step execution reco
 | `:mycelium/input-error` | Input schema validation failure (workflow didn't run) |
 | `:mycelium/schema-error` | Runtime schema violation details |
 | `:mycelium/join-error` | Join node error details |
+| `:mycelium/resilience-error` | Resilience policy trigger details (`:type`, `:cell`, `:message`) |
 | `:mycelium/child-trace` | Nested workflow trace (composed cells) |

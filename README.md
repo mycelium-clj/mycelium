@@ -177,6 +177,29 @@ External dependencies are injected, never acquired by cells:
    :async?      true})
 ```
 
+### Parameterized Cells
+
+The same cell handler can be reused with different configuration by passing a map with `:id` and `:params` instead of a bare keyword:
+
+```clojure
+(defmethod cell/cell-spec :math/multiply [_]
+  {:id      :math/multiply
+   :handler (fn [_ data]
+              (let [factor (get-in data [:mycelium/params :factor])]
+                (assoc data :result (* factor (:x data)))))
+   :schema  {:input  [:map [:x :int]]
+             :output [:map [:result :int]]}})
+
+(myc/run-workflow
+  {:cells {:start  {:id :math/multiply :params {:factor 3}}
+           :double {:id :math/multiply :params {:factor 2}}}
+   :pipeline [:start :double]}
+  {} {:x 5})
+;; => {:x 5, :result 30}  — first ×3 = 15, then ×2 = 30
+```
+
+Params are injected as `:mycelium/params` in the data map before the handler runs, and automatically cleaned up after each step. Bare keywords continue to work as before.
+
 ## Accumulating Data Model
 
 Cells communicate through an accumulating data map. Every cell receives the full map of all keys produced by every prior cell in the path — not just its immediate predecessor. Cells `assoc` their outputs into this map, and the enriched map flows forward.
@@ -292,6 +315,64 @@ Each join produces a single trace entry with a `:join-traces` vector containing 
 | `:on-failure` | `nil` | Cell name to route to on failure (informational) |
 | `:timeout-ms` | `30000` | Timeout in ms for async cell invocations within the join |
 
+## Resilience Policies
+
+Cells can be wrapped with [resilience4j](https://github.com/resilience4j/resilience4j) policies — timeouts, retries, circuit breakers, bulkheads, and rate limiters — via the `:resilience` key in a workflow definition:
+
+```clojure
+(myc/run-workflow
+  {:cells {:start :api/fetch-data
+           :fallback :ui/show-error}
+   :edges {:start    {:done :end, :failed :fallback}
+           :fallback :end}
+   :dispatches {:start [[:failed (fn [d] (some? (:mycelium/resilience-error d)))]
+                         [:done   (fn [d] (nil? (:mycelium/resilience-error d)))]]}
+   :resilience {:start {:timeout        {:timeout-ms 5000}
+                         :retry          {:max-attempts 3 :wait-ms 200}
+                         :circuit-breaker {:failure-rate 50
+                                           :minimum-calls 10
+                                           :sliding-window-size 100
+                                           :wait-in-open-ms 60000}
+                         :bulkhead       {:max-concurrent 25 :max-wait-ms 0}
+                         :rate-limiter   {:limit-for-period 50
+                                          :limit-refresh-period-ms 500
+                                          :timeout-ms 5000}
+                         :async-timeout-ms 30000}}}
+  resources initial-data)
+```
+
+When a resilience policy triggers (timeout, circuit open, bulkhead full, rate limited, retries exhausted), the handler returns data with `:mycelium/resilience-error` instead of throwing. Use dispatch predicates to route to fallback cells.
+
+### Resilience Error Map
+
+```clojure
+{:type    :timeout       ;; :timeout, :circuit-open, :bulkhead-full, :rate-limited, :unknown
+ :cell    :start         ;; workflow cell name
+ :message "..."}         ;; human-readable description
+```
+
+### Stateful Policies
+
+Circuit breakers and rate limiters track state across calls. Use `pre-compile` + `run-compiled` so the same instance is reused:
+
+```clojure
+(def compiled (myc/pre-compile workflow-def))
+(myc/run-compiled compiled resources data)  ;; CB state persists
+```
+
+### Policy Reference
+
+| Policy | Key | Config | Default |
+|--------|-----|--------|---------|
+| Timeout | `:timeout` | `:timeout-ms` | (required) |
+| Retry | `:retry` | `:max-attempts`, `:wait-ms` | 3, 500 |
+| Circuit Breaker | `:circuit-breaker` | `:failure-rate`, `:minimum-calls`, `:sliding-window-size`, `:wait-in-open-ms` | 50, 10, 100, 60000 |
+| Bulkhead | `:bulkhead` | `:max-concurrent`, `:max-wait-ms` | 25, 0 |
+| Rate Limiter | `:rate-limiter` | `:limit-for-period`, `:limit-refresh-period-ms`, `:timeout-ms` | 50, 500, 5000 |
+| Async Timeout | `:async-timeout-ms` | (integer, ms) | 30000 |
+
+`:async-timeout-ms` controls how long the resilience wrapper waits for an async cell's promise to resolve. It is independent of the resilience4j `:timeout` policy.
+
 ## Compile-Time Validation
 
 `compile-workflow` validates before any code runs:
@@ -301,6 +382,7 @@ Each join produces a single trace entry with a `:join-traces` vector containing 
 - **Reachability** — every cell and join must be reachable from `:start`
 - **Dispatch coverage** — every edge label must have a corresponding dispatch predicate, and vice versa
 - **Schema chain** — each cell's input keys must be available from upstream outputs (join-aware: validates member inputs and accumulates union of member outputs)
+- **Resilience validation** — policy keys are valid, referenced cells exist, timeout-ms is positive
 - **Join validation** — member cells exist, no name collisions with cells, members have no edges, output keys are disjoint (or `:merge-fn` provided), strategy is valid, no cell appears in multiple joins
 
 ```
@@ -609,6 +691,7 @@ mycelium/
 │   ├── cell.clj          ;; Cell registry (multimethod-based)
 │   ├── schema.clj        ;; Malli pre/post interceptors
 │   ├── workflow.clj      ;; DSL → Maestro compiler
+│   ├── resilience.clj    ;; resilience4j wrapper (timeout, retry, CB, bulkhead, rate limiter)
 │   ├── compose.clj       ;; Hierarchical workflow nesting
 │   ├── manifest.clj      ;; EDN manifest loading, cell briefs
 │   ├── middleware.clj     ;; Ring middleware for workflow execution
@@ -617,6 +700,10 @@ mycelium/
 │   └── core.clj          ;; Public API
 └── test/mycelium/        ;; tests and assertions
 ```
+
+## Acknowledgements
+
+* [Statecharts: a visual formalism for complex systems](https://www.sciencedirect.com/science/article/pii/0167642387900359)
 
 ## License
 
