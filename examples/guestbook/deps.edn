@@ -26,7 +26,8 @@
         ch.qos.logback/logback-classic   {:mvn/version "1.5.12"}}
 
  :aliases
- {:run  {:main-opts ["-m" "yourname.guestbook.core"]}
+ {:run  {:extra-paths ["env/prod/clj"]
+         :main-opts ["-m" "yourname.guestbook.core"]}
 
   :dev  {:extra-paths ["env/dev/clj" "test/clj"]
          :extra-deps  {integrant/repl                  {:mvn/version "0.5.0"}

@@ -24,7 +24,7 @@
  :db/connection
  {:jdbc-url #profile {:dev  "jdbc:sqlite:guestbook_dev.db"
                       :test "jdbc:sqlite:guestbook_test.db"
-                      :prod #env JDBC_URL}}
+                      :prod #or [#env JDBC_URL "jdbc:sqlite:guestbook.db"]}}
 
  :reitit.routes/pages
  {:db #ig/ref :db/connection}
