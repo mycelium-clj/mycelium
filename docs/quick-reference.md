@@ -538,7 +538,31 @@ Declare compile-time path invariants that are checked against all enumerated pat
 
 ;; Progress report
 (println (orch/progress manifest))
+
+;; Region brief — scoped context for a subgraph cluster
+(orch/region-brief manifest :auth)
+;; => {:cells [{:name :start, :id :auth/parse, :schema {...}}, ...]
+;;     :internal-edges {:start {:ok :validate-session}}
+;;     :entry-points [:start]
+;;     :exit-points [{:cell :validate-session, :transitions {:authorized :fetch-profile}}]
+;;     :prompt "## Region: auth\n..."}
 ```
+
+### Regions
+
+Group cells into named regions in the manifest for LLM context scoping:
+
+```clojure
+{:cells {:start :auth/parse, :validate :auth/validate, :fetch :user/fetch, :render :ui/render}
+ :regions {:auth       [:start :validate]
+           :data-fetch [:fetch]}}
+```
+
+- Region cells must exist in `:cells`
+- No cell may appear in multiple regions
+- `region-brief` returns cell schemas, internal edges, entry/exit points, and a prompt
+- Exit point `:transitions` is always a map — unconditional edges use `{:unconditional :target}`
+- Regions are purely informational — no runtime behavior change
 
 ## Workflow Trace
 

@@ -476,6 +476,7 @@ Declare compile-time path invariants that are checked against all enumerated wor
 - **Graph timeouts** — timeout cells exist, values are positive integers, cells have `:timeout` edge
 - **Resilience validation** — policy keys are valid, referenced cells exist, timeout-ms is positive
 - **Join validation** — member cells exist, no name collisions with cells, members have no edges, output keys are disjoint (or `:merge-fn` provided), strategy is valid, no cell appears in multiple joins
+- **Region validation** (manifest) — region cells exist, no cell in multiple regions
 
 ```
 Schema chain error: :user/fetch-profile at :fetch-profile requires keys #{:user-id}
@@ -773,7 +774,26 @@ Also available as `myc/infer-workflow-schema`. Handles branching (union of all i
 
 ;; Progress report
 (println (orch/progress manifest))
+
+;; Region brief — scoped context for a subgraph cluster
+(orch/region-brief manifest :auth)
+;; => {:cells [{:name :start, :id :auth/parse, :schema {...}}, ...]
+;;     :internal-edges {:start {:ok :validate-session}}
+;;     :entry-points [:start]
+;;     :exit-points [{:cell :validate-session, :transitions {:authorized :fetch-profile}}]
+;;     :prompt "## Region: auth\n..."}
 ```
+
+### Regions
+
+Group cells into named regions in the manifest for LLM context scoping. `region-brief` generates a focused brief showing cells, schemas, internal edges, and entry/exit points — useful when an LLM only needs context for a subgraph:
+
+```clojure
+{:cells {:start :auth/parse, :validate :auth/validate, :fetch :user/fetch}
+ :regions {:auth [:start :validate]}}
+```
+
+Region cells must exist in `:cells` and no cell may appear in multiple regions. Regions have no runtime effect.
 
 ## Architecture
 
