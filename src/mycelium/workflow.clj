@@ -635,11 +635,11 @@
         seen (atom {})]
     (doseq [[group-name {:keys [cells on-error]}] error-groups]
       (when-not (contains? cell-names on-error)
-        (throw (ex-info (str "error group " group-name " :on-error references :nonexistent cell " on-error)
+        (throw (ex-info (str "error group " group-name " :on-error references nonexistent cell " on-error)
                         {:group group-name :on-error on-error})))
       (doseq [cell-name cells]
         (when-not (contains? cell-names cell-name)
-          (throw (ex-info (str "error group " group-name " references nonexistent cell :missing " cell-name)
+          (throw (ex-info (str "error group " group-name " references nonexistent cell " cell-name)
                           {:group group-name :cell cell-name})))
         (when-let [other-group (get @seen cell-name)]
           (throw (ex-info (str "Cell " cell-name " appears in multiple error groups: "
@@ -703,15 +703,26 @@
 
 (defn- wrap-handler-with-error-catch
   "Wraps a cell handler with try/catch. On error, returns data with
-   :mycelium/error {:cell cell-name, :message msg}."
-  [handler cell-name]
-  (fn [resources data]
-    (try
-      (handler resources data)
-      (catch Throwable e
-        (assoc data :mycelium/error
-               {:cell    cell-name
-                :message (or (ex-message e) (.toString e))})))))
+   :mycelium/error {:cell cell-name, :message msg}.
+   Handles both sync (2-arity) and async (4-arity) handlers."
+  [handler cell-name async?]
+  (let [make-error (fn [data e]
+                     (assoc data :mycelium/error
+                            {:cell    cell-name
+                             :message (or (ex-message e) (.toString e))}))]
+    (if async?
+      (fn [resources data callback error-callback]
+        (try
+          (handler resources data
+                   callback
+                   (fn [e] (callback (make-error data e))))
+          (catch Throwable e
+            (callback (make-error data e)))))
+      (fn [resources data]
+        (try
+          (handler resources data)
+          (catch Throwable e
+            (make-error data e)))))))
 
 (defn- apply-error-group-wrapping
   "Wraps handlers of cells in error groups with try/catch error catching."
@@ -723,7 +734,7 @@
                 (let [state-id (resolve-state-id cell-name)]
                   (if-let [cell (get acc state-id)]
                     (assoc acc state-id
-                           (update cell :handler wrap-handler-with-error-catch cell-name))
+                           (update cell :handler wrap-handler-with-error-catch cell-name (:async? cell)))
                     acc)))
               state->cell
               grouped-cells))))

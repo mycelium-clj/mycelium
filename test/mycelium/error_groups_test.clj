@@ -174,3 +174,55 @@
           "Error handler cleaned up the error")
       (is (true? (:recovered result))
           "Error handler ran"))))
+
+;; ===== Round 9: Async cell in error group =====
+
+(deftest error-group-async-cell-test
+  (testing "Async cell in error group that errors routes to handler"
+    (defmethod cell/cell-spec :c/async-explode [_]
+      {:id :c/async-explode
+       :handler (fn [_resources _data _callback error-cb]
+                  (future
+                    (error-cb (ex-info "async-boom" {}))))
+       :async? true
+       :schema {:input [:map] :output [:map]}})
+    (make-cell :c/async-err)
+
+    (let [result (myc/run-workflow
+                   {:cells {:start :c/async-explode, :err :c/async-err}
+                    :edges {:start :end, :err :end}
+                    :error-groups {:grp {:cells [:start]
+                                         :on-error :err}}}
+                   {} {})]
+      (is (true? (:c/async-err result))
+          "Error handler ran")
+      (is (= :start (get-in result [:mycelium/error :cell]))
+          "Error has cell name"))))
+
+;; ===== Round 10: Error group + timeout interaction =====
+
+(deftest error-group-with-timeout-test
+  (testing "Timeout takes priority over error group catch"
+    (make-cell :c/slow-explode (fn [_ data]
+                                  (Thread/sleep 200)
+                                  (throw (ex-info "should-not-reach" {}))))
+    (make-cell :c/timeout-handler)
+    (make-cell :c/error-handler10)
+
+    (let [result (myc/run-workflow
+                   {:cells {:start :c/slow-explode
+                            :timeout-cell :c/timeout-handler
+                            :err :c/error-handler10}
+                    :edges {:start {:done :end, :timeout :timeout-cell}
+                            :timeout-cell :end
+                            :err :end}
+                    :dispatches {:start [[:done (fn [d] (not (or (:mycelium/timeout d)
+                                                                  (:mycelium/error d))))]]}
+                    :timeouts {:start 50}
+                    :error-groups {:grp {:cells [:start]
+                                         :on-error :err}}}
+                   {} {})]
+      (is (true? (:c/timeout-handler result))
+          "Timeout handler ran (timeout fires before error)")
+      (is (nil? (:c/error-handler10 result))
+          "Error handler did not run"))))
