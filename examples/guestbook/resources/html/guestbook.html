@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Guestbook</title>
+    <link rel="stylesheet"
+          href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+    <style>
+        ul.messages { list-style: none; }
+        ul.messages li {
+            padding: 10px;
+            border-bottom: 1px dotted #ccc;
+        }
+        li:last-child { border-bottom: none; }
+        li time { font-size: 12px; color: #888; }
+        form { padding: 30px; }
+    </style>
+</head>
+<body>
+<section class="section">
+    <div class="container">
+        <h1 class="title">Guestbook</h1>
+
+        <div class="columns">
+            <div class="column">
+                <h3 class="subtitle">Messages</h3>
+                <ul class="messages">
+                    {% for item in messages %}
+                    <li>
+                        <time>{{item.timestamp}}</time>
+                        <p>{{item.message}}</p>
+                        <p><strong>- {{item.name}}</strong></p>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+
+        <div class="columns">
+            <div class="column">
+                <form method="POST" action="/save-message">
+                    <div class="field">
+                        <label class="label">Name</label>
+                        <div class="control">
+                            <input class="input" type="text"
+                                   name="name" required />
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label class="label">Message</label>
+                        <div class="control">
+                            <textarea class="textarea"
+                                      name="message" required></textarea>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <div class="control">
+                            <input type="submit"
+                                   class="button is-primary"
+                                   value="Submit" />
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</section>
+</body>
+</html>

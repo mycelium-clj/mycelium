@@ -1,0 +1,40 @@
+{:paths ["src/clj" "resources"]
+
+ :deps {org.clojure/clojure              {:mvn/version "1.12.0"}
+
+        ;; Mycelium
+        io.github.mycelium-clj/mycelium {:local/root "../.."}
+
+        ;; Kit
+        io.github.kit-clj/kit-core      {:mvn/version "1.0.10"}
+        io.github.kit-clj/kit-jetty     {:mvn/version "1.0.1"}
+
+        ;; Routing
+        metosin/reitit-ring              {:mvn/version "0.7.2"}
+
+        ;; Ring
+        ring/ring-defaults               {:mvn/version "0.5.0"}
+
+        ;; Templating
+        selmer/selmer                    {:mvn/version "1.12.61"}
+
+        ;; Database
+        com.github.seancorfield/next.jdbc {:mvn/version "1.3.939"}
+        org.xerial/sqlite-jdbc            {:mvn/version "3.45.3.0"}
+
+        ;; Logging
+        ch.qos.logback/logback-classic   {:mvn/version "1.5.12"}}
+
+ :aliases
+ {:run  {:main-opts ["-m" "yourname.guestbook.core"]}
+
+  :dev  {:extra-paths ["env/dev/clj" "test/clj"]
+         :extra-deps  {integrant/repl                  {:mvn/version "0.5.0"}
+                       nrepl/nrepl                     {:mvn/version "1.3.0"}
+                       org.clojure/tools.namespace     {:mvn/version "1.5.0"}}}
+
+  :test {:extra-paths ["env/dev/clj" "test/clj"]
+         :extra-deps  {lambdaisland/kaocha                {:mvn/version "1.91.1392"}
+                       integrant/repl                     {:mvn/version "0.5.0"}
+                       org.clojure/tools.namespace        {:mvn/version "1.5.0"}}
+         :main-opts   ["-m" "kaocha.runner"]}}}

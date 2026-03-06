@@ -1,0 +1,37 @@
+{:system/env
+ #profile {:dev  :dev
+           :test :test
+           :prod :prod}
+
+ :server/http
+ {:port    #long #or [#env PORT 3000]
+  :host    #or [#env HTTP_HOST "0.0.0.0"]
+  :handler #ig/ref :handler/ring}
+
+ :handler/ring
+ {:router                #ig/ref :router/core
+  :site-defaults-config  {:params    {:urlencoded true
+                                      :multipart  true
+                                      :nested     true
+                                      :keywordize true}
+                          :security  {:anti-forgery false}
+                          :static    {:resources "public"}
+                          :responses {:not-modified-responses true
+                                      :absolute-redirects     true
+                                      :content-types          true
+                                      :default-charset        "utf-8"}}}
+
+ :db/connection
+ {:jdbc-url #profile {:dev  "jdbc:sqlite:guestbook_dev.db"
+                      :test "jdbc:sqlite:guestbook_test.db"
+                      :prod #env JDBC_URL}}
+
+ :reitit.routes/pages
+ {:db #ig/ref :db/connection}
+
+ :router/routes
+ {:routes #ig/refset :reitit/routes}
+
+ :router/core
+ {:routes #ig/ref :router/routes
+  :env    #ig/ref :system/env}}
