@@ -195,7 +195,32 @@
                            {:type :must-follow, :if :start, :then :b}]}  ;; fails (start→end has no :b)
             {} {})))))
 
-;; ===== Round 12: Invalid constraint type =====
+;; ===== Round 12: Constraints with join nodes =====
+
+(deftest constraints-with-join-node-test
+  (testing "Constraints work with join node names on paths"
+    (make-cell :c/start12)
+    (make-cell :c/branch-a)
+    (make-cell :c/branch-b)
+    (make-cell :c/after12)
+
+    ;; :gather is a join name — it should appear on paths and be constrainable
+    (let [result (myc/run-workflow
+                   {:cells {:start    :c/start12
+                            :branch-a :c/branch-a
+                            :branch-b :c/branch-b
+                            :after    :c/after12}
+                    :joins {:gather {:cells [:branch-a :branch-b] :strategy :parallel}}
+                    :edges {:start  :gather
+                            :gather :after
+                            :after  :end}
+                    :constraints [{:type :must-follow, :if :start, :then :gather}
+                                  {:type :must-precede, :cell :gather, :before :after}
+                                  {:type :always-reachable, :cell :gather}]}
+                   {} {})]
+      (is (some? result) "All constraints pass with join node on path"))))
+
+;; ===== Round 13: Invalid constraint type =====
 
 (deftest invalid-constraint-type-throws-test
   (testing "Unknown constraint :type throws"

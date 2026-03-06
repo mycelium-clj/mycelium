@@ -395,7 +395,9 @@ Declare compile-time path invariants that are checked against all enumerated pat
 | `:never-together` | All listed `:cells` must never appear on the same path |
 | `:always-reachable` | `:cell` must appear on every path that reaches `:end` (ignores `:error`/`:halt` paths) |
 
-Constraints are checked after all other validations pass. Violations throw with the specific path that violates the constraint.
+- Constraints reference **workflow cell names** (including join names), not join member cells or cell registry IDs
+- `:always-reachable` passes vacuously if no paths reach `:end` (all paths go to `:error`/`:halt`)
+- Violations throw at compile time with the specific path that violates the constraint
 
 ## Compile-Time Validation
 
