@@ -110,6 +110,27 @@ Edges map transition labels to targets. Dispatch predicates examine the data to 
 
 Handlers compute data; dispatch predicates decide the route. This keeps business logic decoupled from graph navigation.
 
+### Default Transitions
+
+Use `:default` as an edge label for a catch-all fallback. If no other dispatch predicate matches, the `:default` edge is taken automatically — no dispatch predicate needed:
+
+```clojure
+(myc/run-workflow
+  {:cells {:start :check/threshold
+           :big   :process/big-values
+           :err   :process/error-handler}
+   :edges {:start {:high :big, :default :err}
+           :big   {:done :end}
+           :err   {:done :end}}
+   :dispatches {:start [[:high (fn [data] (> (:value data) 10))]]
+                :big   [[:done (constantly true)]]
+                :err   [[:done (constantly true)]]}}
+  {} {:value 3})
+;; value <= 10, :high predicate fails → :default catches → routes to :err
+```
+
+This is especially useful as a safety net for agent-generated routing logic. `:default` must not be the only edge — if all paths lead to the same target, use an unconditional keyword edge instead.
+
 ### Per-Transition Output Schemas
 
 Cells with multiple outgoing edges can declare different output schemas for each transition:

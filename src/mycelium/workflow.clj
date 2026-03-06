@@ -370,6 +370,35 @@
     (let [{:keys [id]} (normalize-cell-ref cell-name cell-ref)]
       (cell/get-cell! id))))
 
+(defn- validate-default-edges!
+  "Validates :default edge usage. Throws if :default is the only edge for a cell."
+  [edges-map]
+  (doseq [[cell-name edge-def] edges-map]
+    (when (and (map? edge-def)
+               (contains? edge-def :default)
+               (= 1 (count edge-def)))
+      (throw (ex-info (str "Cell " cell-name " has :default as its only edge. "
+                           "Use an unconditional edge (keyword) instead.")
+                      {:cell-name cell-name})))))
+
+(defn- inject-default-dispatches
+  "For cells with a :default edge and no explicit :default dispatch predicate,
+   auto-appends [:default (constantly true)] as the last dispatch predicate."
+  [dispatches-map edges-map]
+  (reduce (fn [acc [cell-name edge-def]]
+            (if (and (map? edge-def)
+                     (contains? edge-def :default))
+              (let [dispatch-vec (get acc cell-name [])
+                    has-default? (some #(= :default (first %)) dispatch-vec)]
+                (if has-default?
+                  acc
+                  (assoc acc cell-name
+                         (conj (vec dispatch-vec)
+                               [:default (constantly true)]))))
+              acc))
+          (or dispatches-map {})
+          edges-map))
+
 (defn- merge-default-dispatches
   "Merges default dispatches from cell specs into the workflow dispatches.
    For each cell with map edges and no explicit dispatch, checks the cell spec
@@ -503,6 +532,8 @@
   [{:keys [cells edges dispatches joins input-schema pipeline] :as raw-workflow}]
   (let [{:keys [cells edges dispatches joins input-schema]} (expand-pipeline raw-workflow)]
     (validate-cells-exist! cells)
+    ;; Validate :default edge usage (must not be sole edge)
+    (validate-default-edges! edges)
     ;; Normalize to {name → cell-id} for all downstream validation
     (let [cell-ids (cells->ids cells)]
       ;; Validate :input-schema well-formedness if present
@@ -525,9 +556,11 @@
           (v/validate-edge-targets! edges valid-names)
           (v/validate-reachability! edges valid-names))
         ;; Merge default dispatches — include join default dispatches (filtered to match edge keys)
+        ;; Also auto-inject :default catch-all predicates
         (let [join-dispatches    (compute-join-dispatches joins-map edges)
+              with-defaults      (inject-default-dispatches dispatches edges)
               effective-dispatches (merge join-dispatches
-                                          (merge-default-dispatches dispatches edges cell-ids))]
+                                          (merge-default-dispatches with-defaults edges cell-ids))]
           (v/validate-dispatch-coverage! edges effective-dispatches))
         (validate-schema-chain! edges cell-ids joins-map)))))
 
@@ -656,9 +689,11 @@
          ;; Determine which cells are consumed by joins
          join-members (set (mapcat :cells (vals joins-map)))
          ;; Merge default dispatches from cell specs AND join default dispatches (filtered to edge keys)
+         ;; Also auto-inject :default catch-all predicates
          join-dispatches    (compute-join-dispatches joins-map edges)
+         with-defaults      (inject-default-dispatches dispatches edges)
          effective-dispatches (merge join-dispatches
-                                     (merge-default-dispatches dispatches edges cell-ids))
+                                     (merge-default-dispatches with-defaults edges cell-ids))
          ;; Build state->cell map for non-join-member cells
          state->cell (into {}
                            (keep (fn [[cell-name cell-id]]

@@ -120,6 +120,23 @@ Edges map transition labels to targets. Dispatch predicates examine data to pick
 
 Handlers compute data; dispatch predicates decide the route.
 
+### Default Transitions
+
+Use `:default` as an edge label for a catch-all fallback when no other dispatch predicate matches:
+
+```clojure
+{:cells {:start :check/validate, :ok :process/run, :err :process/error}
+ :edges {:start {:success :ok, :default :err}
+         :ok :end, :err :end}
+ :dispatches {:start [[:success (fn [d] (:valid d))]]}}
+;; :default auto-generates (constantly true) as the last predicate
+;; No need to add [:default ...] to :dispatches
+```
+
+- `:default` must not be the only edge (use an unconditional keyword edge instead)
+- You can provide an explicit `:default` predicate in `:dispatches` to override the auto-generated one
+- Trace entries record `:default` as the transition label
+
 ## Join Nodes (Fork-Join)
 
 When multiple independent cells can run concurrently, declare a join node:
