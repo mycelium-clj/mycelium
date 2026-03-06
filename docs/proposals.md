@@ -124,9 +124,9 @@ This is distinct from resilience4j `:timeout` policies (which wrap the handler w
 
 ---
 
-## 4. Zooming / Depth for LLM Context Management
+## ~~4. Zooming / Depth for LLM Context Management~~ (Implemented)
 
-**Value: Medium | Feasibility: High**
+**Value: Medium | Feasibility: High** — **DONE**
 
 The existing `cell-brief` and `orchestrate` module scope context per-cell well. What's missing is a "region brief" — context for a subgraph cluster rather than a single cell. For example: "here are the 3 cells in the metadata-fixing region, their schemas, and how they connect to each other."
 
@@ -216,7 +216,7 @@ Interceptors already fill this role. Workflow-level interceptors with `:pre`/`:p
 | Done | Default transitions | Small | None |
 | Done | Global constraints | Medium | `enumerate-paths` (exists) |
 | Done | Graph-level timeouts | Medium | None (reuses join timeout pattern) |
-| Later | Region briefs | Small | None |
+| Done | Region briefs | Small | None |
 | Deferred | Error groups | Small | None |
 | Skip | Edge actions | - | Covered by interceptors |
 

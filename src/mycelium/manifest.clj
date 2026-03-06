@@ -86,6 +86,25 @@
             (assoc :edges edges
                    :dispatches {}))))))
 
+;; ===== Region validation =====
+
+(defn- validate-regions!
+  "Validates :regions definitions. Each region's cells must exist in :cells,
+   and no cell may appear in multiple regions."
+  [regions cells]
+  (let [cell-names (set (keys cells))
+        seen (atom {})]
+    (doseq [[region-name region-cells] regions]
+      (doseq [cell-name region-cells]
+        (when-not (contains? cell-names cell-name)
+          (throw (ex-info (str "region " region-name " references nonexistent cell " cell-name)
+                          {:region region-name :cell cell-name})))
+        (when-let [other-region (get @seen cell-name)]
+          (throw (ex-info (str "Cell " cell-name " appears in multiple regions: "
+                               other-region " and " region-name)
+                          {:cell cell-name :regions [other-region region-name]})))
+        (swap! seen assoc cell-name region-name)))))
+
 ;; ===== Manifest validation =====
 
 (defn- validate-on-error!
@@ -169,6 +188,9 @@
        ;; Validate :input-schema if present
        (when-let [input-schema (:input-schema manifest)]
          (v/validate-malli-schema! input-schema "input-schema"))
+       ;; Validate :regions if present
+       (when-let [regions (:regions manifest)]
+         (validate-regions! regions cells))
        manifest))))
 
 ;; ===== Fragment expansion =====
