@@ -425,6 +425,25 @@ Key behaviors:
 - If the halting cell dispatches to a branch, resume continues on the correct branch
 - Calling `resume-compiled` on a non-halted result throws an exception
 
+## Constraints
+
+Declare compile-time path invariants that are checked against all enumerated workflow paths:
+
+```clojure
+{:cells {:start :check/flag, :fix :repair/apply-tags, :done :ui/render}
+ :pipeline [:start :fix :done]
+ :constraints [{:type :must-follow, :if :start, :then :fix}]}
+```
+
+| Type | Meaning |
+|------|---------|
+| `:must-follow` | If `:if` cell appears on a path, `:then` cell must appear later |
+| `:must-precede` | `:cell` must appear before `:before` on every path containing `:before` |
+| `:never-together` | Listed `:cells` must never all appear on the same path |
+| `:always-reachable` | `:cell` must appear on every path that reaches `:end` |
+
+`:always-reachable` only checks paths to `:end` — paths terminating at `:error` or `:halt` are ignored. It passes vacuously if no paths reach `:end`. Constraints reference workflow cell names (including join names), not join member cells. Violations throw at compile time with the specific path that violates the constraint.
+
 ## Compile-Time Validation
 
 `compile-workflow` validates before any code runs:
@@ -434,6 +453,7 @@ Key behaviors:
 - **Reachability** — every cell and join must be reachable from `:start`
 - **Dispatch coverage** — every edge label must have a corresponding dispatch predicate, and vice versa
 - **Schema chain** — each cell's input keys must be available from upstream outputs (join-aware: validates member inputs and accumulates union of member outputs)
+- **Constraints** — path invariants checked against all enumerated paths
 - **Resilience validation** — policy keys are valid, referenced cells exist, timeout-ms is positive
 - **Join validation** — member cells exist, no name collisions with cells, members have no edges, output keys are disjoint (or `:merge-fn` provided), strategy is valid, no cell appears in multiple joins
 

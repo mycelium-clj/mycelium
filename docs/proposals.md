@@ -32,9 +32,9 @@ Currently if no dispatch predicate matches, Maestro throws — catastrophic for 
 
 ---
 
-## 2. Temporal Logic / Global Constraints
+## ~~2. Temporal Logic / Global Constraints~~ (Implemented)
 
-**Value: High | Feasibility: Medium**
+**Value: High | Feasibility: Medium** — **DONE**
 
 "If a file is flagged as missing metadata, it must pass through a tagging cell before `:end`" — the kind of invariant that catches agent mistakes at compile time rather than runtime. `dev/enumerate-paths` already walks all paths; a constraint checker would layer on top.
 
@@ -214,7 +214,7 @@ Interceptors already fill this role. Workflow-level interceptors with `:pre`/`:p
 | Priority | Feature | Effort | Dependencies |
 |----------|---------|--------|--------------|
 | Done | Default transitions | Small | None |
-| Soon | Global constraints | Medium | `enumerate-paths` (exists) |
+| Done | Global constraints | Medium | `enumerate-paths` (exists) |
 | Planned | Graph-level timeouts | Medium | None (reuses join timeout pattern) |
 | Later | Region briefs | Small | None |
 | Deferred | Error groups | Small | None |
