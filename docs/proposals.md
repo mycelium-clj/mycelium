@@ -78,9 +78,9 @@ Currently if no dispatch predicate matches, Maestro throws — catastrophic for 
 
 ---
 
-## 3. Graph-Level Timeout Transitions
+## ~~3. Graph-Level Timeout Transitions~~ (Implemented)
 
-**Value: High | Feasibility: High**
+**Value: High | Feasibility: High** — **DONE**
 
 Harel emphasizes time bounds as a property of the state itself, not the internal activity. Currently an agent writing an async cell must bake timeout logic into the handler. Moving timeouts to the edge definition lets the LLM write pure domain logic while the framework handles failure routing.
 
@@ -215,7 +215,7 @@ Interceptors already fill this role. Workflow-level interceptors with `:pre`/`:p
 |----------|---------|--------|--------------|
 | Done | Default transitions | Small | None |
 | Done | Global constraints | Medium | `enumerate-paths` (exists) |
-| Planned | Graph-level timeouts | Medium | None (reuses join timeout pattern) |
+| Done | Graph-level timeouts | Medium | None (reuses join timeout pattern) |
 | Later | Region briefs | Small | None |
 | Deferred | Error groups | Small | None |
 | Skip | Edge actions | - | Covered by interceptors |

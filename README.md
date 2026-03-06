@@ -131,6 +131,25 @@ Use `:default` as an edge label for a catch-all fallback. If no other dispatch p
 
 This is especially useful as a safety net for agent-generated routing logic. `:default` must not be the only edge — if all paths lead to the same target, use an unconditional keyword edge instead.
 
+### Graph-Level Timeouts
+
+Move timeout logic from handlers to the workflow definition. When a cell exceeds its timeout, the framework injects `:mycelium/timeout true` into data and routes to the `:timeout` edge target. Handlers stay pure — no timeout logic needed:
+
+```clojure
+(myc/run-workflow
+  {:cells {:start    :api/fetch-data
+           :render   :ui/render-result
+           :fallback :ui/show-error}
+   :edges {:start    {:done :render, :timeout :fallback}
+           :render   :end
+           :fallback :end}
+   :dispatches {:start [[:done (fn [d] (not (:mycelium/timeout d)))]]}
+   :timeouts {:start 5000}}  ;; 5 seconds
+  {} {:url "https://api.example.com/data"})
+```
+
+The `:timeout` dispatch is auto-injected and evaluated first (before user predicates and `:default`). This is distinct from resilience `:timeout` policies — graph timeouts **route** to an alternative cell, resilience timeouts produce `:mycelium/resilience-error`.
+
 ### Per-Transition Output Schemas
 
 Cells with multiple outgoing edges can declare different output schemas for each transition:
@@ -454,6 +473,7 @@ Declare compile-time path invariants that are checked against all enumerated wor
 - **Dispatch coverage** — every edge label must have a corresponding dispatch predicate, and vice versa
 - **Schema chain** — each cell's input keys must be available from upstream outputs (join-aware: validates member inputs and accumulates union of member outputs)
 - **Constraints** — path invariants checked against all enumerated paths
+- **Graph timeouts** — timeout cells exist, values are positive integers, cells have `:timeout` edge
 - **Resilience validation** — policy keys are valid, referenced cells exist, timeout-ms is positive
 - **Join validation** — member cells exist, no name collisions with cells, members have no edges, output keys are disjoint (or `:merge-fn` provided), strategy is valid, no cell appears in multiple joins
 

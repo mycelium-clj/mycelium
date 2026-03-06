@@ -139,6 +139,29 @@ Use `:default` as an edge label for a catch-all fallback when no other dispatch 
 - Works with join nodes — add `:default` alongside `:done`/`:failure` edges
 - Trace entries record `:default` as the transition label
 
+### Graph-Level Timeouts
+
+Move timeout logic from handlers to the workflow definition. When a cell exceeds its timeout, the framework injects `:mycelium/timeout true` into data and routes to the `:timeout` edge target:
+
+```clojure
+{:cells {:fetch-tags :mp3/parse-id3
+         :render     :ui/render-tags
+         :fallback   :ui/show-error}
+ :edges {:fetch-tags {:done :render, :timeout :fallback}
+         :render     :end
+         :fallback   :end}
+ :dispatches {:fetch-tags [[:done (fn [d] (not (:mycelium/timeout d)))]]}
+ :timeouts {:fetch-tags 5000}}  ;; ms
+```
+
+- Timeout values must be positive integers (milliseconds)
+- Cells with timeouts must have a `:timeout` edge target
+- A `:timeout` dispatch predicate is auto-injected and evaluated **first** (before user predicates)
+- Works with both sync and async cells (async cells become blocking with timeout)
+- Output schema validation is skipped for timed-out cells (handler didn't produce normal output)
+- Trace entries include `:timeout? true` when a cell times out
+- Distinct from resilience `:timeout` policies — graph timeouts **route**, resilience timeouts **error**
+
 ## Join Nodes (Fork-Join)
 
 When multiple independent cells can run concurrently, declare a join node:
@@ -409,6 +432,7 @@ Declare compile-time path invariants that are checked against all enumerated pat
 - **Dispatch coverage** — every edge label must have a dispatch predicate, and vice versa
 - **Schema chain** — each cell's input keys must be available from upstream outputs (join-aware)
 - **Constraints** — path invariants checked against all enumerated paths (see Constraints)
+- **Graph timeouts** — timeout cells exist, values are positive integers, cells have `:timeout` edge
 - **Resilience validation** — policy keys valid, referenced cells exist, timeout-ms positive
 - **Join validation** — member cells exist, no name collisions, members have no edges, output keys disjoint (or `:merge-fn` provided)
 
@@ -602,6 +626,7 @@ A cell can pause the workflow by returning `:mycelium/halt` in its data. The wor
 | `:mycelium/input-error` | Input schema validation failure (workflow didn't run) |
 | `:mycelium/schema-error` | Runtime schema violation details |
 | `:mycelium/join-error` | Join node error details |
+| `:mycelium/timeout` | `true` when a cell exceeded its graph-level timeout |
 | `:mycelium/resilience-error` | Resilience policy trigger details (`:type`, `:cell`, `:message`) |
 | `:mycelium/child-trace` | Nested workflow trace (composed cells) |
 | `:mycelium/halt` | Halt context (true or map) — present when workflow is halted |
