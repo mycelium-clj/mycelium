@@ -377,6 +377,26 @@ Output schema is inferred automatically by walking child workflow edges to `:end
 
 Per-transition schemas are validated based on which dispatch matched. The schema chain validator tracks available keys independently per path.
 
+## Constraints
+
+Declare compile-time path invariants that are checked against all enumerated paths:
+
+```clojure
+{:constraints [{:type :must-follow,      :if :flag-missing, :then :apply-tags}
+               {:type :must-precede,     :cell :validate,   :before :process}
+               {:type :never-together,   :cells [:manual-review :auto-approve]}
+               {:type :always-reachable, :cell :audit-log}]}
+```
+
+| Type | Meaning |
+|------|---------|
+| `:must-follow` | If `:if` cell appears on a path, `:then` cell must appear later on that path |
+| `:must-precede` | `:cell` must appear before `:before` on every path containing `:before` |
+| `:never-together` | All listed `:cells` must never appear on the same path |
+| `:always-reachable` | `:cell` must appear on every path that reaches `:end` (ignores `:error`/`:halt` paths) |
+
+Constraints are checked after all other validations pass. Violations throw with the specific path that violates the constraint.
+
 ## Compile-Time Validation
 
 `compile-workflow` validates before any code runs:
@@ -386,6 +406,7 @@ Per-transition schemas are validated based on which dispatch matched. The schema
 - **Reachability** — every cell and join must be reachable from `:start`
 - **Dispatch coverage** — every edge label must have a dispatch predicate, and vice versa
 - **Schema chain** — each cell's input keys must be available from upstream outputs (join-aware)
+- **Constraints** — path invariants checked against all enumerated paths (see Constraints)
 - **Resilience validation** — policy keys valid, referenced cells exist, timeout-ms positive
 - **Join validation** — member cells exist, no name collisions, members have no edges, output keys disjoint (or `:merge-fn` provided)
 

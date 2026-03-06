@@ -535,6 +535,103 @@
           {}
           joins-map))
 
+;; ===== Constraint validation =====
+
+(defn- enumerate-workflow-paths
+  "Enumerates all paths from :start to terminal states.
+   Returns seq of paths, each a vector of cell-name keywords.
+   Each path also carries :terminal — the terminal state (:end, :error, :halt)."
+  [edges]
+  (loop [queue [[:start [] #{}]]
+         paths []]
+    (if (empty? queue)
+      paths
+      (let [[cell-name path-so-far visited] (first queue)
+            rest-queue (rest queue)]
+        (cond
+          (contains? #{:end :error :halt} cell-name)
+          (recur rest-queue (conj paths {:cells path-so-far :terminal cell-name}))
+
+          (contains? visited cell-name)
+          (recur rest-queue paths)
+
+          :else
+          (let [edge-def    (get edges cell-name)
+                new-visited (conj visited cell-name)
+                new-path    (conj path-so-far cell-name)]
+            (if (keyword? edge-def)
+              (recur (conj (vec rest-queue) [edge-def new-path new-visited])
+                     paths)
+              (let [next-items (mapv (fn [[_ target]]
+                                       [target new-path new-visited])
+                                     edge-def)]
+                (recur (into (vec rest-queue) next-items)
+                       paths)))))))))
+
+(defn- check-constraint
+  "Checks a single constraint against all paths. Returns nil if satisfied,
+   or an error string describing the violation."
+  [constraint paths]
+  (let [type (:type constraint)]
+    (case type
+      :must-follow
+      (let [{:keys [if then]} constraint]
+        (some (fn [{:keys [cells]}]
+                (let [cell-set (set cells)]
+                  (when (contains? cell-set if)
+                    (let [if-idx (.indexOf (vec cells) if)
+                          after  (set (drop (inc if-idx) cells))]
+                      (when-not (contains? after then)
+                        (str "Constraint :must-follow violated: " if " appears on path "
+                             cells " but " then " does not follow it"))))))
+              paths))
+
+      :must-precede
+      (let [{:keys [cell before]} constraint]
+        (some (fn [{:keys [cells]}]
+                (let [cell-set (set cells)]
+                  (when (contains? cell-set before)
+                    (let [before-idx (.indexOf (vec cells) before)
+                          preceding  (set (take before-idx cells))]
+                      (when-not (contains? preceding cell)
+                        (str "Constraint :must-precede violated: " cell " must appear before "
+                             before " on path " cells " but does not"))))))
+              paths))
+
+      :never-together
+      (let [constraint-cells (set (:cells constraint))]
+        (some (fn [{:keys [cells]}]
+                (let [cell-set (set cells)
+                      overlap  (set/intersection cell-set constraint-cells)]
+                  (when (= (count overlap) (count constraint-cells))
+                    (str "Constraint :never-together violated: "
+                         (seq constraint-cells) " all appear on path " cells))))
+              paths))
+
+      :always-reachable
+      (let [target-cell (:cell constraint)
+            end-paths   (filter #(= :end (:terminal %)) paths)]
+        (when (seq end-paths)
+          (some (fn [{:keys [cells]}]
+                  (when-not (contains? (set cells) target-cell)
+                    (str "Constraint :always-reachable violated: " target-cell
+                         " does not appear on path " cells " (which reaches :end)")))
+                end-paths)))
+
+      ;; Unknown type
+      (throw (ex-info (str "Unknown constraint type: " type)
+                      {:constraint constraint})))))
+
+(defn- validate-constraints!
+  "Validates all constraints against enumerated workflow paths.
+   Throws on the first violation found."
+  [constraints edges]
+  (when (seq constraints)
+    (let [paths (enumerate-workflow-paths edges)]
+      (doseq [constraint constraints]
+        (when-let [error (check-constraint constraint paths)]
+          (throw (ex-info error {:constraint constraint})))))))
+
 (defn validate-workflow
   "Runs all validations on a workflow definition.
    Merges :default-dispatches from cell specs as fallback for cells without explicit dispatches."
@@ -572,7 +669,10 @@
               effective-dispatches (merge (merge-default-dispatches with-defaults edges cell-ids)
                                           join-dispatches)]
           (v/validate-dispatch-coverage! edges effective-dispatches))
-        (validate-schema-chain! edges cell-ids joins-map)))))
+        (validate-schema-chain! edges cell-ids joins-map)
+        ;; Validate constraints (after all structural validations pass)
+        (when-let [constraints (:constraints raw-workflow)]
+          (validate-constraints! constraints edges))))))
 
 ;; ===== Workflow-level interceptor matching =====
 
