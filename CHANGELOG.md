@@ -2,6 +2,28 @@
 
 ## 2026-03-07
 
+### Auto Key Propagation
+
+Automatic key propagation, enabled by default. Each cell's output is automatically merged with its input — cells only need to return new or changed keys. Eliminates the boilerplate of explicitly passing through all upstream keys in every cell's output and output schema. Disable with `:propagate-keys? false` if needed.
+
+```clojure
+;; Before: handler must include ALL keys downstream cells need
+(defmethod cell/cell-spec :process/compute-tax [_]
+  {:handler (fn [_ data]
+              (assoc data :tax (* (:subtotal data) 0.1)))
+   :schema {:output [:map [:subtotal :double] [:items :any] [:tax :double]]}})
+
+;; After: handler returns only new/changed keys
+(defmethod cell/cell-spec :process/compute-tax [_]
+  {:handler (fn [_ data] {:tax (* (:subtotal data) 0.1)})
+   :schema {:output [:map [:tax :double]]}})
+
+;; Key propagation is on by default — no opt-in needed
+(myc/run-workflow workflow-def resources data)
+```
+
+Handler output takes precedence over input keys (explicit override). Internal `:mycelium/*` keys are excluded from propagation. Works with both sync and async cells, and combines with `:coerce? true`. Disable with `{:propagate-keys? false}`.
+
 ### Schema Coercion
 
 Automatic numeric type coercion via `:coerce? true` in compilation options. Eliminates `int` vs `double` mismatches — when a cell produces `949.0` (double) but the next cell's schema expects `:int`, coercion converts it automatically. Handles both `double→int` and `int→double`. Non-numeric values still fail validation normally.
