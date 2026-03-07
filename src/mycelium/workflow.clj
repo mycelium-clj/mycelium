@@ -1124,8 +1124,9 @@
                                joins-map)
          fsm-states (merge fsm-cell-states fsm-join-states)
          ;; Build interceptors — compose custom pre/post with schema interceptors
-         schema-pre  (schema/make-pre-interceptor state->cell)
-         schema-post (schema/make-post-interceptor state->cell state->edge-targets state->names)
+         schema-opts (select-keys opts [:coerce?])
+         schema-pre  (schema/make-pre-interceptor state->cell schema-opts)
+         schema-post (schema/make-post-interceptor state->cell state->edge-targets state->names schema-opts)
          pre  (if-let [custom-pre (:pre opts)]
                 (fn [fsm-state resources]
                   (-> (schema-pre fsm-state resources)

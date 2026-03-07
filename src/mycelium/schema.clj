@@ -4,6 +4,7 @@
    and async callback wrappers for async cells."
   (:require [malli.core :as m]
             [malli.error :as me]
+            [malli.transform :as mt]
             [maestro.core :as fsm]))
 
 (def ^:private terminal-states
@@ -76,6 +77,76 @@
           :errors  (me/humanize explanation)
           :data    data})))))
 
+;; ===== Schema coercion =====
+
+(def number-coercion-transformer
+  "Malli transformer that coerces between numeric types.
+   Converts double→int when schema expects :int, and int→double when schema expects :double."
+  (mt/transformer
+   {:name     :number-coercion
+    :decoders {:int    {:compile (fn [_ _] (fn [x] (if (number? x) (int x) x)))}
+               :double {:compile (fn [_ _] (fn [x] (if (number? x) (double x) x)))}}}))
+
+(defn coerce-input
+  "Coerces data to match the cell's input schema using number coercion.
+   Returns {:data coerced-data} on success, {:error error-map} on failure.
+   If no input schema exists, returns {:data data} unchanged."
+  [cell data]
+  (let [schema (get-in cell [:schema :input])]
+    (if-not schema
+      {:data data}
+      (let [coerced (m/decode schema data number-coercion-transformer)]
+        (if-let [explanation (m/explain schema coerced)]
+          {:error {:cell-id (:id cell)
+                   :phase   :input
+                   :errors  (me/humanize explanation)
+                   :data    data}}
+          {:data coerced})))))
+
+(defn coerce-output
+  "Coerces data to match the cell's output schema using number coercion.
+   Returns {:data coerced-data} on success, {:error error-map} on failure.
+   Handles single schemas and per-transition schema maps."
+  ([cell data]
+   (coerce-output cell data nil))
+  ([cell data transition]
+   (let [output (get-in cell [:schema :output])]
+     (cond
+       (nil? output)
+       {:data data}
+
+       (map? output)
+       (if transition
+         (if-let [schema (get output transition)]
+           (let [coerced (m/decode schema data number-coercion-transformer)]
+             (if-let [explanation (m/explain schema coerced)]
+               {:error {:cell-id (:id cell)
+                        :phase   :output
+                        :errors  (me/humanize explanation)
+                        :data    data}}
+               {:data coerced}))
+           {:data data})
+         ;; No transition — try each schema, use first that matches after coercion
+         (let [results (for [[_label schema] output]
+                         (let [coerced (m/decode schema data number-coercion-transformer)]
+                           (when-not (m/explain schema coerced)
+                             coerced)))]
+           (if-let [coerced (first (filter some? results))]
+             {:data coerced}
+             {:error {:cell-id (:id cell)
+                      :phase   :output
+                      :errors  (str "Data does not match any output schema for " (:id cell))
+                      :data    data}})))
+
+       :else
+       (let [coerced (m/decode output data number-coercion-transformer)]
+         (if-let [explanation (m/explain output coerced)]
+           {:error {:cell-id (:id cell)
+                    :phase   :output
+                    :errors  (me/humanize explanation)
+                    :data    data}}
+           {:data coerced}))))))
+
 (defn- compile-schema-value
   "Compiles a single schema value to a Malli schema object if it's a raw form.
    Returns the value unchanged if it's already compiled or nil."
@@ -111,19 +182,29 @@
 (defn make-pre-interceptor
   "Creates a Maestro pre-interceptor that validates input schemas.
    `state->cell` is a map of state-id → cell-spec.
+   `opts` — optional map. When `:coerce?` is true, coerces data before validation.
    Skips terminal states."
-  [state->cell]
-  (fn [fsm-state _resources]
-    (let [state-id (:current-state-id fsm-state)]
-      (if (contains? terminal-states state-id)
-        fsm-state
-        (if-let [cell (get state->cell state-id)]
-          (if-let [error (validate-input cell (:data fsm-state))]
-            (-> fsm-state
-                (assoc :current-state-id ::fsm/error)
-                (assoc-in [:data :mycelium/schema-error] error))
-            fsm-state)
-          fsm-state)))))
+  ([state->cell] (make-pre-interceptor state->cell {}))
+  ([state->cell opts]
+   (let [coerce? (:coerce? opts)]
+     (fn [fsm-state _resources]
+       (let [state-id (:current-state-id fsm-state)]
+         (if (contains? terminal-states state-id)
+           fsm-state
+           (if-let [cell (get state->cell state-id)]
+             (if coerce?
+               (let [result (coerce-input cell (:data fsm-state))]
+                 (if (:error result)
+                   (-> fsm-state
+                       (assoc :current-state-id ::fsm/error)
+                       (assoc-in [:data :mycelium/schema-error] (:error result)))
+                   (assoc fsm-state :data (:data result))))
+               (if-let [error (validate-input cell (:data fsm-state))]
+                 (-> fsm-state
+                     (assoc :current-state-id ::fsm/error)
+                     (assoc-in [:data :mycelium/schema-error] error))
+                 fsm-state))
+             fsm-state)))))))
 
 (defn make-post-interceptor
   "Creates a Maestro post-interceptor that validates output schemas and appends
@@ -133,61 +214,74 @@
    used to infer which transition was taken from :current-state-id (set by Maestro
    after dispatch evaluation).
    `state->names` maps resolved-state-id → cell-name keyword for human-readable traces.
+   `opts` — optional map. When `:coerce?` is true, coerces output data before validation.
    Skips terminal states."
-  [state->cell state->edge-targets state->names]
-  (fn [fsm-state _resources]
-    (let [state-id (:last-state-id fsm-state)]
-      (if (or (nil? state-id)
-              (contains? terminal-states state-id))
-        fsm-state
-        (if-let [cell (get state->cell state-id)]
-          (let [transition (when state->edge-targets
-                             (get-in state->edge-targets
-                                     [state-id (:current-state-id fsm-state)]))
-                data       (:data fsm-state)
-                ;; Skip output validation when resilience error or timeout is present
-                ;; (the handler was short-circuited)
-                error      (when-not (or (:mycelium/resilience-error data)
-                                         (:mycelium/timeout data)
-                                         (:mycelium/error data))
-                             (validate-output cell data transition))
-                ;; Extract duration-ms from the latest Maestro trace segment
-                duration-ms (some-> (:trace fsm-state) last :duration-ms)
-                ;; Extract join sub-traces if present
-                join-traces (:mycelium/join-traces data)
-                halted?     (some? (:mycelium/halt data))
-                timed-out?  (some? (:mycelium/timeout data))
-                trace-entry (cond-> {:cell       (get state->names state-id)
-                                     :cell-id    (:id cell)
-                                     :transition transition
-                                     :data       (dissoc data :mycelium/trace :mycelium/join-traces)}
-                              duration-ms   (assoc :duration-ms duration-ms)
-                              join-traces   (assoc :join-traces join-traces)
-                              halted?       (assoc :halted true)
-                              timed-out?    (assoc :timeout? true)
-                              error         (assoc :error error))]
-            (cond
-              error
-              (-> fsm-state
-                  (update-in [:data :mycelium/trace] (fnil conj []) trace-entry)
-                  (update :data dissoc :mycelium/join-traces :mycelium/params)
-                  (assoc :current-state-id ::fsm/error)
-                  (assoc-in [:data :mycelium/schema-error] error))
+  ([state->cell state->edge-targets state->names]
+   (make-post-interceptor state->cell state->edge-targets state->names {}))
+  ([state->cell state->edge-targets state->names opts]
+   (let [coerce? (:coerce? opts)]
+     (fn [fsm-state _resources]
+       (let [state-id (:last-state-id fsm-state)]
+         (if (or (nil? state-id)
+                 (contains? terminal-states state-id))
+           fsm-state
+           (if-let [cell (get state->cell state-id)]
+             (let [transition (when state->edge-targets
+                                (get-in state->edge-targets
+                                        [state-id (:current-state-id fsm-state)]))
+                   data       (:data fsm-state)
+                   skip-validation? (or (:mycelium/resilience-error data)
+                                        (:mycelium/timeout data)
+                                        (:mycelium/error data))
+                   ;; When coercing, get both error and coerced data
+                   coerce-result (when (and coerce? (not skip-validation?))
+                                   (coerce-output cell data transition))
+                   ;; When not coercing, just validate
+                   error (cond
+                           skip-validation?               nil
+                           coerce?                        (:error coerce-result)
+                           :else                          (validate-output cell data transition))
+                   ;; Use coerced data when available
+                   data (if (and coerce? (not skip-validation?) (not error))
+                          (:data coerce-result)
+                          data)
+                   ;; Extract duration-ms from the latest Maestro trace segment
+                   duration-ms (some-> (:trace fsm-state) last :duration-ms)
+                   ;; Extract join sub-traces if present
+                   join-traces (:mycelium/join-traces data)
+                   halted?     (some? (:mycelium/halt data))
+                   timed-out?  (some? (:mycelium/timeout data))
+                   trace-entry (cond-> {:cell       (get state->names state-id)
+                                        :cell-id    (:id cell)
+                                        :transition transition
+                                        :data       (dissoc data :mycelium/trace :mycelium/join-traces)}
+                                 duration-ms   (assoc :duration-ms duration-ms)
+                                 join-traces   (assoc :join-traces join-traces)
+                                 halted?       (assoc :halted true)
+                                 timed-out?    (assoc :timeout? true)
+                                 error         (assoc :error error))]
+               (cond
+                 error
+                 (-> fsm-state
+                     (update-in [:data :mycelium/trace] (fnil conj []) trace-entry)
+                     (update :data dissoc :mycelium/join-traces :mycelium/params)
+                     (assoc :current-state-id ::fsm/error)
+                     (assoc-in [:data :mycelium/schema-error] error))
 
-              halted?
-              (-> fsm-state
-                  (update-in [:data :mycelium/trace] (fnil conj []) trace-entry)
-                  (update :data dissoc :mycelium/join-traces)
-                  ;; Save resume point (where dispatches resolved to)
-                  (assoc-in [:data :mycelium/resume] (:current-state-id fsm-state))
-                  ;; Redirect to halt
-                  (assoc :current-state-id ::fsm/halt))
+                 halted?
+                 (-> fsm-state
+                     (assoc :data data)
+                     (update-in [:data :mycelium/trace] (fnil conj []) trace-entry)
+                     (update :data dissoc :mycelium/join-traces)
+                     (assoc-in [:data :mycelium/resume] (:current-state-id fsm-state))
+                     (assoc :current-state-id ::fsm/halt))
 
-              :else
-              (-> fsm-state
-                  (update-in [:data :mycelium/trace] (fnil conj []) trace-entry)
-                  (update :data dissoc :mycelium/join-traces :mycelium/params :mycelium/timeout))))
-          fsm-state)))))
+                 :else
+                 (-> fsm-state
+                     (assoc :data data)
+                     (update-in [:data :mycelium/trace] (fnil conj []) trace-entry)
+                     (update :data dissoc :mycelium/join-traces :mycelium/params :mycelium/timeout))))
+             fsm-state)))))))
 
 (defn wrap-async-callback
   "Wraps an async cell's callback to validate output before forwarding.

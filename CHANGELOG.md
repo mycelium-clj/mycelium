@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-03-07
+
+### Schema Coercion
+
+Automatic numeric type coercion via `:coerce? true` in compilation options. Eliminates `int` vs `double` mismatches — when a cell produces `949.0` (double) but the next cell's schema expects `:int`, coercion converts it automatically. Handles both `double→int` and `int→double`. Non-numeric values still fail validation normally.
+
+```clojure
+(myc/run-workflow workflow-def resources data {:coerce? true})
+
+;; Or with pre-compile:
+(def compiled (myc/pre-compile workflow-def {:coerce? true}))
+```
+
+New public functions in `mycelium.schema`: `coerce-input`, `coerce-output`, `number-coercion-transformer`.
+
 ## 2026-03-06
 
 ### WorkflowStore Persistence Protocol

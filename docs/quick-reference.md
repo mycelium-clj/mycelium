@@ -150,7 +150,8 @@ mentally reconstruct the architecture from.
 {:pre      (fn [fsm-state resources] fsm-state)  ;; pre-interceptor for every state
  :post     (fn [fsm-state resources] fsm-state)  ;; post-interceptor for every state
  :on-error (fn [resources fsm-state] data)        ;; runs when FSM enters error state
- :on-end   (fn [resources fsm-state] data)}       ;; runs when FSM enters end state
+ :on-end   (fn [resources fsm-state] data)        ;; runs when FSM enters end state
+ :coerce?  true}                                  ;; auto-coerce numeric types (int↔double)
 ```
 
 ## Accumulating Data Model
