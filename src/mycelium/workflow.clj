@@ -424,10 +424,8 @@
    For each cell, checks its input keys are available from upstream outputs or workflow input.
    For per-transition output schemas, only passes the keys from the matching transition's schema
    along each edge.
-   Join nodes: validates each member's inputs, then adds the union of all member outputs.
-   When `propagate-keys?` is true, available keys pass through cells even if not
-   declared in the cell's output schema."
-  [edges-map cells-map joins-map & {:keys [propagate-keys?]}]
+   Join nodes: validates each member's inputs, then adds the union of all member outputs."
+  [edges-map cells-map joins-map]
   (let [get-input-keys  (fn [cell-id]
                           (let [cell   (cell/get-cell! cell-id)
                                 schema (get-in cell [:schema :input])]
