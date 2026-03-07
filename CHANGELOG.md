@@ -13,7 +13,7 @@ Automatic numeric type coercion via `:coerce? true` in compilation options. Elim
 (def compiled (myc/pre-compile workflow-def {:coerce? true}))
 ```
 
-New public functions in `mycelium.schema`: `coerce-input`, `coerce-output`, `number-coercion-transformer`.
+Fractional values like `949.5` are never silently truncated — only whole-valued doubles (`949.0`) are coerced. Uses Malli's built-in `json-transformer` under the hood. New public functions in `mycelium.schema`: `coerce-input`, `coerce-output`.
 
 ## 2026-03-06
 

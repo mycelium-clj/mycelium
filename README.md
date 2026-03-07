@@ -542,7 +542,7 @@ Enable automatic numeric type coercion with `:coerce? true` in compilation optio
 (myc/run-compiled compiled resources initial-data)
 ```
 
-Coercion handles `double→int` and `int→double` conversions automatically. Non-numeric values are unaffected — a string where an int is expected still fails validation. Extra keys are preserved.
+Coercion handles `double→int` and `int→double` conversions automatically. Only whole-valued doubles are coerced to int (`949.0 → 949`); fractional values like `949.5` are left unconverted and fail validation normally. Non-numeric values are unaffected — a string where an int is expected still fails. Extra keys are preserved.
 
 ## Workflow Trace
 
