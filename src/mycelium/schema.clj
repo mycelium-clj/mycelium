@@ -80,17 +80,11 @@
 ;; ===== Schema coercion =====
 
 (def number-coercion-transformer
-  "Malli transformer that coerces between numeric types.
-   double→int: only when the value has no fractional part (949.0 → 949, but 949.5 is left as-is
-   so that schema validation catches it). int→double: always safe."
-  (mt/transformer
-   {:name     :number-coercion
-    :decoders {:int    {:compile (fn [_ _]
-                                  (fn [x]
-                                    (if (and (number? x) (== x (Math/floor (double x))))
-                                      (int x)
-                                      x)))}
-               :double {:compile (fn [_ _] (fn [x] (if (number? x) (double x) x)))}}}))
+  "Malli's json-transformer handles numeric coercion safely:
+   double→int only when the value has no fractional part (949.0 → 949,
+   but 949.5 is left unconverted so validation catches it).
+   int→double always converts."
+  mt/json-transformer)
 
 (defn coerce-input
   "Coerces data to match the cell's input schema using number coercion.
