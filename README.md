@@ -530,6 +530,20 @@ Pre and post interceptors validate every transition automatically:
 
 Schema violations redirect to the error state with detailed diagnostics attached at `:mycelium/schema-error`.
 
+### Schema Coercion
+
+Enable automatic numeric type coercion with `:coerce? true` in compilation options. This eliminates `int` vs `double` mismatches — a common source of schema validation errors when one cell produces `949.0` (double) but the next expects `:int`:
+
+```clojure
+(myc/run-workflow workflow-def resources initial-data {:coerce? true})
+
+;; Or with pre-compile:
+(def compiled (myc/pre-compile workflow-def {:coerce? true}))
+(myc/run-compiled compiled resources initial-data)
+```
+
+Coercion handles `double→int` and `int→double` conversions automatically. Only whole-valued doubles are coerced to int (`949.0 → 949`); fractional values like `949.5` are left unconverted and fail validation normally. Non-numeric values are unaffected — a string where an int is expected still fails. Extra keys are preserved.
+
 ## Workflow Trace
 
 Every workflow run produces a `:mycelium/trace` vector in the result data — a step-by-step record of which cells ran, what transition was taken, and what the data looked like after each step.
