@@ -61,6 +61,27 @@ from "what to do next":
                      [:reject   (fn [d] (= :reject (:fraud-status d)))]]}
 ```
 
+**Errors are data, not exceptions.** Expected error conditions (validation
+failures, business rule violations, declined payments) should be represented by
+setting a key on the data map, not by throwing exceptions. The workflow then
+routes these states via dispatch predicates to the appropriate handler cell:
+
+```clojure
+;; The payment cell sets an error key instead of throwing:
+(fn [resources data]
+  (let [result (charge-card resources (:card data) (:total data))]
+    (assoc data :payment-status (if (:success result) :approved :declined))))
+
+;; The workflow routes on that key:
+:dispatches {:payment [[:approved (fn [d] (= :approved (:payment-status d)))]
+                       [:declined (fn [d] (= :declined (:payment-status d)))]]}
+```
+
+This keeps the graph's control flow explicit and visible in the manifest. Every
+possible outcome has a named edge you can see and test. Reserve exceptions for
+truly unexpected failures (IO errors, connection drops, out of memory) -- things
+that represent broken infrastructure, not business outcomes.
+
 **Joins declare parallelism.** When cells don't depend on each other's output,
 declare them as a join. Each member receives the same input snapshot and produces
 non-overlapping output keys. The framework runs them concurrently and merges the
