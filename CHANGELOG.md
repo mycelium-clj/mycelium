@@ -2,6 +2,20 @@
 
 ## 2026-03-07
 
+### Unified Error Inspection
+
+`workflow-error` and `error?` functions for consistent error handling. Instead of checking 6 different `:mycelium/*` keys with different shapes, use one function:
+
+```clojure
+(let [result (myc/run-workflow wf resources data opts)]
+  (if (myc/error? result)
+    (let [{:keys [error-type cell-id message details]} (myc/workflow-error result)]
+      (log/error error-type cell-id message))
+    (handle-success result)))
+```
+
+Error types: `:schema/input`, `:schema/output`, `:handler`, `:resilience/timeout`, `:resilience/circuit-open`, `:resilience/bulkhead-full`, `:resilience/rate-limited`, `:join`, `:timeout`, `:input`. All return a consistent map with `:error-type`, `:message`, and `:details`.
+
 ### Live Execution Tracing
 
 `:on-trace` callback for real-time observation of workflow execution. Called after each cell completes with the trace entry (cell name, cell-id, transition, duration, data snapshot, errors). No more `println` in handlers.

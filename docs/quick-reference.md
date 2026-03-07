@@ -841,3 +841,15 @@ Implement the protocol for your persistence backend (DB, Redis, etc.):
 | `:mycelium/halt` | Halt context (true or map) — present when workflow is halted |
 | `:mycelium/resume` | Resume state token — present when workflow is halted |
 | `:mycelium/session-id` | Store session ID — present when using `run-with-store`/`resume-with-store` on halt |
+
+### Unified Error Inspection
+
+Instead of checking individual keys, use `workflow-error` and `error?`:
+
+```clojure
+(myc/error? result)           ;; => true/false
+(myc/workflow-error result)   ;; => {:error-type :schema/output, :cell-id :app/step,
+                              ;;     :message "...", :details {...}} or nil
+```
+
+Error types: `:schema/input`, `:schema/output`, `:handler`, `:resilience/timeout`, `:resilience/circuit-open`, `:resilience/bulkhead-full`, `:resilience/rate-limited`, `:join`, `:timeout`, `:input`.

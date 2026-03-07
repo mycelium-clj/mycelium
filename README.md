@@ -580,6 +580,35 @@ Key propagation is enabled by default. Each cell's handler output is merged on t
 
 Handler output takes precedence over input keys. Internal `:mycelium/*` keys are excluded from propagation. Disable with `{:propagate-keys? false}` if needed.
 
+## Error Inspection
+
+Use `workflow-error` and `error?` for consistent error handling instead of checking individual `:mycelium/*` keys:
+
+```clojure
+(let [result (myc/run-workflow wf resources data opts)]
+  (if (myc/error? result)
+    (let [{:keys [error-type cell-id message details]} (myc/workflow-error result)]
+      (println error-type "-" message))
+    (handle-success result)))
+```
+
+`workflow-error` returns a unified map with `:error-type`, `:message`, and `:details` regardless of the error source:
+
+| `:error-type` | Source |
+|---------------|--------|
+| `:schema/input` | Cell input schema validation failed |
+| `:schema/output` | Cell output schema validation failed |
+| `:handler` | Cell handler threw an exception (error groups) |
+| `:resilience/timeout` | Resilience timeout policy triggered |
+| `:resilience/circuit-open` | Circuit breaker is open |
+| `:resilience/bulkhead-full` | Bulkhead capacity exhausted |
+| `:resilience/rate-limited` | Rate limiter rejected the call |
+| `:join` | One or more join members failed |
+| `:timeout` | Graph-level timeout |
+| `:input` | Workflow-level input schema validation failed |
+
+Returns `nil` (and `error?` returns `false`) when no error is present.
+
 ## Workflow Trace
 
 Every workflow run produces a `:mycelium/trace` vector in the result data — a step-by-step record of which cells ran, what transition was taken, and what the data looked like after each step.

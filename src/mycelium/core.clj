@@ -221,3 +221,67 @@
   "Walks a workflow and reports accumulated schema keys at each cell.
    See mycelium.dev/infer-workflow-schema."
   dev/infer-workflow-schema)
+
+;; --- Error inspection ---
+
+(defn workflow-error
+  "Extracts a unified error map from a workflow result.
+   Returns nil if no error is present, or a map with:
+     :error-type — keyword identifying the error category
+     :message    — human-readable error description
+     :details    — original error data for programmatic access
+   Plus error-specific keys like :cell-id, :cell, :cell-path, :failed-keys."
+  [result]
+  (cond
+    ;; Workflow-level input schema validation
+    (:mycelium/input-error result)
+    (let [err (:mycelium/input-error result)]
+      {:error-type :input
+       :message    (str "Workflow input validation failed: " (:errors err))
+       :details    err})
+
+    ;; Schema validation error (input or output)
+    (:mycelium/schema-error result)
+    (let [err (:mycelium/schema-error result)]
+      {:error-type (keyword "schema" (name (:phase err)))
+       :cell-id    (:cell-id err)
+       :cell-path  (:cell-path err)
+       :failed-keys (:failed-keys err)
+       :message    (str "Schema " (name (:phase err)) " validation failed at "
+                        (:cell-id err) ": " (:errors err))
+       :details    err})
+
+    ;; Handler exception (error groups)
+    (:mycelium/error result)
+    (let [err (:mycelium/error result)]
+      {:error-type :handler
+       :cell       (:cell err)
+       :message    (or (:message err) (str "Handler error at " (:cell err)))
+       :details    err})
+
+    ;; Resilience error (timeout, circuit breaker, etc.)
+    (:mycelium/resilience-error result)
+    (let [err (:mycelium/resilience-error result)]
+      {:error-type (keyword "resilience" (name (:type err)))
+       :cell       (:cell err)
+       :message    (or (:message err)
+                       (str "Resilience " (name (:type err)) " at " (:cell err)))
+       :details    err})
+
+    ;; Join error
+    (:mycelium/join-error result)
+    (let [errs (:mycelium/join-error result)]
+      {:error-type :join
+       :message    (str "Join failed: " (count errs) " member(s) errored")
+       :details    errs})
+
+    ;; Graph-level timeout (bare flag)
+    (:mycelium/timeout result)
+    {:error-type :timeout
+     :message    "Cell timed out"
+     :details    {:timeout true}}))
+
+(defn error?
+  "Returns true if the workflow result contains any error."
+  [result]
+  (some? (workflow-error result)))
