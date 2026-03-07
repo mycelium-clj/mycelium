@@ -1,0 +1,185 @@
+{:id :order-placement
+
+ :cells
+ {:start
+  {:id  :order/expand-items
+   :doc "Expand item maps [{id qty}...] into individual item records from catalog"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:items [:vector :any]]
+             [:catalog :any]
+             [:coupon :any]
+             [:coupons :any]
+             [:membership :keyword]
+             [:state :string]
+             [:card :string]
+             [:gift-card-balance :double]
+             [:loyalty-points :int]
+             [:tax-rates :any]]
+    :output [:map
+             [:expanded-items [:vector :any]]]}}
+
+  :combo75
+  {:id  :order/apply-combo75
+   :doc "COMBO75: flat $75 off when laptop+headphones+novel all present, distributed proportionally"
+   :on-error nil
+   :schema
+   {:input  [:map [:expanded-items [:vector :any]]]
+    :output [:map [:expanded-items [:vector :any]]]}}
+
+  :promotions
+  {:id  :order/apply-promotions
+   :doc "Apply category promos (ELEC10, BUNDLE5), order-level % discount, and fixed coupon"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:expanded-items [:vector :any]]
+             [:coupon :any]
+             [:coupons :any]]
+    :output [:map [:expanded-items [:vector :any]]]}}
+
+  :loyalty-redeem
+  {:id  :order/apply-loyalty-redemption
+   :doc "Redeem loyalty points (100 pts = $5), compute discounted subtotal"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:expanded-items [:vector :any]]
+             [:loyalty-points :int]]
+    :output [:map
+             [:expanded-items [:vector :any]]
+             [:redemption-amount :double]
+             [:discounted-subtotal :double]]}}
+
+  ;; --- parallel join members ---
+  :calc-tax
+  {:id  :order/calc-tax
+   :doc "Calculate per-item tax based on category×state matrix"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:expanded-items [:vector :any]]
+             [:state :string]
+             [:tax-rates :any]]
+    :output [:map
+             [:items-with-tax [:vector :any]]
+             [:total-tax :double]]}}
+
+  :calc-ship
+  {:id  :order/calc-shipping
+   :doc "Calculate per-warehouse-group shipping costs"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:expanded-items [:vector :any]]
+             [:membership :keyword]]
+    :output [:map
+             [:total-shipping :double]
+             [:shipping-groups :any]]}}
+
+  ;; --- after join ---
+  :compute-total
+  {:id  :order/compute-total
+   :doc "Sum discounted subtotal + tax + shipping"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:discounted-subtotal :double]
+             [:total-tax :double]
+             [:total-shipping :double]]
+    :output [:map [:total :double]]}}
+
+  :fraud
+  {:id  :order/fraud-check
+   :doc "Reject orders > $5000"
+   :on-error nil
+   :schema
+   {:input  [:map [:total :double]]
+    :output {:approved [:map [:fraud-status :keyword]]
+             :reject   [:map [:fraud-status :keyword]
+                             [:order-error :string]]}}}
+
+  :reserve
+  {:id  :order/reserve-inventory
+   :doc "Reserve inventory for ordered items"
+   :on-error nil
+   :schema
+   {:input  [:map [:items [:vector :any]]]
+    :output [:map [:inventory-reserved :boolean]]}
+   :requires [:inventory]}
+
+  :pay
+  {:id  :order/process-payment
+   :doc "Process split payment: gift card first, then credit card"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:total :double]
+             [:card :string]
+             [:gift-card-balance :double]]
+    :output {:approved [:map
+                        [:payment :any]
+                        [:payment-status :keyword]]
+             :declined [:map
+                        [:payment-status :keyword]
+                        [:order-error :string]]}}}
+
+  :rollback
+  {:id  :order/rollback-inventory
+   :doc "Restore inventory after payment failure"
+   :on-error nil
+   :schema
+   {:input  [:map [:items [:vector :any]]]
+    :output [:map
+             [:inventory-reserved :boolean]
+             [:order-error :string]]}
+   :requires [:inventory]}
+
+  :finalize
+  {:id  :order/finalize-result
+   :doc "Build final order result with items-detail and loyalty points"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:items-with-tax [:vector :any]]
+             [:discounted-subtotal :double]
+             [:membership :keyword]
+             [:redemption-amount :double]]
+    :output [:map
+             [:items-detail [:vector :any]]
+             [:points-earned :int]
+             [:order-status :keyword]]}}}
+
+ :joins
+ {:fees {:cells    [:calc-tax :calc-ship]
+         :strategy :parallel}}
+
+ :edges
+ {:start          {:done :combo75}
+  :combo75        {:done :promotions}
+  :promotions     {:done :loyalty-redeem}
+  :loyalty-redeem {:done :fees}
+  :fees           {:done :compute-total}
+  :compute-total  {:done :fraud}
+  :fraud          {:approved :reserve
+                   :reject   :end}
+  :reserve        {:done :pay}
+  :pay            {:approved :finalize
+                   :declined :rollback}
+  :rollback       {:done :end}
+  :finalize       {:done :end}}
+
+ :dispatches
+ {:start          [[:done (constantly true)]]
+  :combo75        [[:done (constantly true)]]
+  :promotions     [[:done (constantly true)]]
+  :loyalty-redeem [[:done (constantly true)]]
+  :compute-total  [[:done (constantly true)]]
+  :fraud          [[:approved (fn [data] (not= :reject (:fraud-status data)))]
+                   [:reject   (fn [data] (= :reject (:fraud-status data)))]]
+  :reserve        [[:done (constantly true)]]
+  :pay            [[:approved (fn [data] (= :approved (:payment-status data)))]
+                   [:declined (fn [data] (= :declined (:payment-status data)))]]
+  :rollback       [[:done (constantly true)]]
+  :finalize       [[:done (constantly true)]]}}

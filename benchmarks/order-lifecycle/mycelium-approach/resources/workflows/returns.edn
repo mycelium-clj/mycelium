@@ -1,0 +1,72 @@
+{:id :order-returns
+
+ :cells
+ {:start
+  {:id  :return/find-items
+   :doc "Match returned items to original order detail records"
+   :on-error nil
+   :schema
+   {:input  [:map
+             ;; From original order (placement output):
+             [:items-detail [:vector :any]]
+             [:discounted-subtotal :double]
+             [:shipping-groups :any]          ;; ← explicit key name from placement
+             [:payment :any]
+             [:points-earned :int]
+             ;; From return request:
+             [:returned-items [:vector :any]]
+             [:reason :keyword]]
+    :output [:map
+             [:returned-detail [:vector :any]]]}}
+
+  :calc-refunds
+  {:id  :return/calc-refunds
+   :doc "Compute subtotal, tax, and shipping refunds"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:returned-detail [:vector :any]]
+             [:items-detail [:vector :any]]
+             [:shipping-groups :any]
+             [:reason :keyword]]
+    :output [:map
+             [:subtotal-refund :double]
+             [:tax-refund :double]
+             [:shipping-refund :double]
+             [:total-refund :double]]}}
+
+  :calc-adjustments
+  {:id  :return/calc-adjustments
+   :doc "Compute loyalty clawback and payment refund split"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:subtotal-refund :double]
+             [:total-refund :double]
+             [:discounted-subtotal :double]
+             [:points-earned :int]
+             [:payment :any]]
+    :output [:map
+             [:loyalty-clawback :int]
+             [:payment-refund :any]]}}
+
+  :restore-inventory
+  {:id  :return/restore-inventory
+   :doc "Add returned item quantities back to inventory"
+   :on-error nil
+   :schema
+   {:input  [:map [:returned-items [:vector :any]]]
+    :output [:map [:inventory-restored :boolean]]}
+   :requires [:inventory]}}
+
+ :edges
+ {:start             {:done :calc-refunds}
+  :calc-refunds      {:done :calc-adjustments}
+  :calc-adjustments  {:done :restore-inventory}
+  :restore-inventory {:done :end}}
+
+ :dispatches
+ {:start             [[:done (constantly true)]]
+  :calc-refunds      [[:done (constantly true)]]
+  :calc-adjustments  [[:done (constantly true)]]
+  :restore-inventory [[:done (constantly true)]]}}

@@ -1,0 +1,222 @@
+{:id :order-placement
+
+ :cells
+ {:start
+  {:id  :order/expand-items
+   :doc "Expand item maps (both simple {id qty} and {id {:qty N :gift-wrap true}}) into individual records"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:items [:vector :any]]
+             [:catalog :any]
+             [:coupon :any]
+             [:coupons :any]
+             [:membership :keyword]
+             [:state :string]
+             [:card :string]
+             [:gift-card-balance :double]
+             [:store-credit-balance :double]
+             [:loyalty-points :int]
+             [:tax-rates :any]
+             [:currency :string]]
+    :output [:map
+             [:expanded-items [:vector :any]]]}}
+
+  :bulk-pricing
+  {:id  :order/apply-bulk-pricing
+   :doc "Quantity discounts: 3-4 units 5% off, 5+ units 10% off per product"
+   :on-error nil
+   :schema
+   {:input  [:map [:expanded-items [:vector :any]]]
+    :output [:map [:expanded-items [:vector :any]]]}}
+
+  :combo75
+  {:id  :order/apply-combo75
+   :doc "COMBO75: flat $75 off when laptop+headphones+novel all present"
+   :on-error nil
+   :schema
+   {:input  [:map [:expanded-items [:vector :any]]]
+    :output [:map [:expanded-items [:vector :any]]]}}
+
+  :promotions
+  {:id  :order/apply-promotions
+   :doc "ELEC10, BUNDLE5, order-level %, fixed coupon"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:expanded-items [:vector :any]]
+             [:coupon :any]
+             [:coupons :any]]
+    :output [:map [:expanded-items [:vector :any]]]}}
+
+  :loyalty-redeem
+  {:id  :order/apply-loyalty-redemption
+   :doc "Redeem loyalty points (100 pts = $5), compute discounted subtotal"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:expanded-items [:vector :any]]
+             [:loyalty-points :int]]
+    :output [:map
+             [:expanded-items [:vector :any]]
+             [:redemption-amount :double]
+             [:discounted-subtotal :double]]}}
+
+  ;; --- 3-way parallel join members ---
+  :calc-tax
+  {:id  :order/calc-tax
+   :doc "Per-item tax based on category*state matrix"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:expanded-items [:vector :any]]
+             [:state :string]
+             [:tax-rates :any]]
+    :output [:map
+             [:items-with-tax [:vector :any]]
+             [:total-tax :double]]}}
+
+  :calc-ship
+  {:id  :order/calc-shipping
+   :doc "Per-warehouse-group shipping costs"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:expanded-items [:vector :any]]
+             [:membership :keyword]]
+    :output [:map
+             [:total-shipping :double]
+             [:shipping-groups :any]]}}
+
+  :calc-gift-wrap
+  {:id  :order/calc-gift-wrap
+   :doc "Gift wrap costs ($2.99 books/digital, $4.99 others) + 8% service tax (0% OR)"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:expanded-items [:vector :any]]
+             [:state :string]]
+    :output [:map
+             [:gift-wrap-total :double]
+             [:gift-wrap-tax :double]]}}
+
+  ;; --- after join ---
+  :compute-total
+  {:id  :order/compute-total
+   :doc "Sum subtotal + tax + shipping + gift-wrap + gift-wrap-tax"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:discounted-subtotal :double]
+             [:total-tax :double]
+             [:total-shipping :double]
+             [:gift-wrap-total :double]
+             [:gift-wrap-tax :double]]
+    :output [:map [:total :double]]}}
+
+  :fraud
+  {:id  :order/fraud-check
+   :doc "Reject orders > $5000"
+   :on-error nil
+   :schema
+   {:input  [:map [:total :double]]
+    :output {:approved [:map [:fraud-status :keyword]]
+             :reject   [:map [:fraud-status :keyword]
+                             [:order-error :string]]}}}
+
+  :reserve
+  {:id  :order/reserve-inventory
+   :doc "Reserve inventory for ordered items"
+   :on-error nil
+   :schema
+   {:input  [:map [:items [:vector :any]]]
+    :output [:map [:inventory-reserved :boolean]]}
+   :requires [:inventory]}
+
+  :pay
+  {:id  :order/process-payment
+   :doc "3-way payment: gift card -> store credit -> credit card"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:total :double]
+             [:card :string]
+             [:gift-card-balance :double]
+             [:store-credit-balance :double]]
+    :output {:approved [:map
+                        [:payment :any]
+                        [:payment-status :keyword]]
+             :declined [:map
+                        [:payment-status :keyword]
+                        [:order-error :string]]}}}
+
+  :rollback
+  {:id  :order/rollback-inventory
+   :doc "Restore inventory after payment failure"
+   :on-error nil
+   :schema
+   {:input  [:map [:items [:vector :any]]]
+    :output [:map
+             [:inventory-reserved :boolean]
+             [:order-error :string]]}
+   :requires [:inventory]}
+
+  :finalize
+  {:id  :order/finalize-result
+   :doc "Build items-detail (with category, gift-wrap), loyalty points, currency display"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:items-with-tax [:vector :any]]
+             [:discounted-subtotal :double]
+             [:total-tax :double]
+             [:total-shipping :double]
+             [:gift-wrap-total :double]
+             [:gift-wrap-tax :double]
+             [:total :double]
+             [:membership :keyword]
+             [:redemption-amount :double]
+             [:currency :string]]
+    :output [:map
+             [:items-detail [:vector :any]]
+             [:points-earned :int]
+             [:order-status :keyword]
+             [:display-subtotal :double]
+             [:display-tax :double]
+             [:display-shipping :double]
+             [:display-total :double]]}}}
+
+ :joins
+ {:fees {:cells    [:calc-tax :calc-ship :calc-gift-wrap]
+         :strategy :parallel}}
+
+ :edges
+ {:start          {:done :bulk-pricing}
+  :bulk-pricing   {:done :combo75}
+  :combo75        {:done :promotions}
+  :promotions     {:done :loyalty-redeem}
+  :loyalty-redeem {:done :fees}
+  :fees           {:done :compute-total}
+  :compute-total  {:done :fraud}
+  :fraud          {:approved :reserve
+                   :reject   :end}
+  :reserve        {:done :pay}
+  :pay            {:approved :finalize
+                   :declined :rollback}
+  :rollback       {:done :end}
+  :finalize       {:done :end}}
+
+ :dispatches
+ {:start          [[:done (constantly true)]]
+  :bulk-pricing   [[:done (constantly true)]]
+  :combo75        [[:done (constantly true)]]
+  :promotions     [[:done (constantly true)]]
+  :loyalty-redeem [[:done (constantly true)]]
+  :compute-total  [[:done (constantly true)]]
+  :fraud          [[:approved (fn [data] (not= :reject (:fraud-status data)))]
+                   [:reject   (fn [data] (= :reject (:fraud-status data)))]]
+  :reserve        [[:done (constantly true)]]
+  :pay            [[:approved (fn [data] (= :approved (:payment-status data)))]
+                   [:declined (fn [data] (= :declined (:payment-status data)))]]
+  :rollback       [[:done (constantly true)]]
+  :finalize       [[:done (constantly true)]]}}

@@ -1,0 +1,126 @@
+{:id :checkout-pipeline
+ :cells {:start       {:id :checkout/validate-cart
+                       :doc "Validate cart items against catalog, normalize line items"
+                       :on-error nil
+                       :schema {:input  [:map
+                                         [:items [:vector :any]]
+                                         [:catalog :any]
+                                         [:coupon :any]
+                                         [:coupons :any]
+                                         [:membership :keyword]
+                                         [:state :string]
+                                         [:card :string]
+                                         [:tax-rates :any]]
+                                :output {:valid   [:map
+                                                   [:line-items [:vector :any]]
+                                                   [:subtotal :double]
+                                                   [:total-weight :double]]
+                                         :invalid [:map
+                                                   [:checkout-error :string]]}}}
+
+        :discounts    {:id :checkout/apply-discounts
+                       :doc "Apply percentage and fixed discounts. Highest percentage wins, fixed discounts stack."
+                       :on-error nil
+                       :schema {:input  [:map
+                                         [:subtotal :double]
+                                         [:line-items [:vector :any]]]
+                                :output [:map
+                                         [:discounted-subtotal :double]
+                                         [:percentage-applied :int]
+                                         [:fixed-applied :double]]}}
+
+        :membership   {:id :checkout/membership-benefits
+                       :doc "Apply membership tier benefits: free shipping flag, priority fulfillment"
+                       :on-error nil
+                       :schema {:input  [:map
+                                         [:discounted-subtotal :double]
+                                         [:membership :keyword]]
+                                :output [:map
+                                         [:free-shipping? :boolean]
+                                         [:priority-fulfillment :boolean]]}}
+
+        :calc-tax     {:id :checkout/calc-tax
+                       :doc "Calculate tax on discounted subtotal using state tax rate"
+                       :on-error nil
+                       :schema {:input  [:map
+                                         [:discounted-subtotal :double]
+                                         [:state :string]]
+                                :output [:map
+                                         [:tax :double]]}}
+
+        :calc-ship    {:id :checkout/calc-shipping
+                       :doc "Calculate shipping cost based on weight, free-shipping flag, and subtotal threshold"
+                       :on-error nil
+                       :schema {:input  [:map
+                                         [:total-weight :double]
+                                         [:discounted-subtotal :double]
+                                         [:free-shipping? :boolean]]
+                                :output [:map
+                                         [:shipping :double]]}}
+
+        :reserve      {:id :checkout/reserve-inventory
+                       :doc "Reserve inventory for all line items"
+                       :on-error nil
+                       :schema {:input  [:map
+                                         [:line-items [:vector :any]]]
+                                :output [:map
+                                         [:inventory-reserved? :boolean]]}}
+
+        :pay          {:id :checkout/process-payment
+                       :doc "Process payment. Cards starting with 4 succeed, 5 decline."
+                       :on-error nil
+                       :schema {:input  [:map
+                                         [:discounted-subtotal :double]
+                                         [:tax :double]
+                                         [:shipping :double]
+                                         [:card :string]]
+                                :output {:approved [:map
+                                                    [:total :double]
+                                                    [:transaction-id :string]
+                                                    [:payment-status :keyword]]
+                                         :declined [:map
+                                                    [:total :double]
+                                                    [:payment-status :keyword]]}}}
+
+        :rollback     {:id :checkout/rollback-inventory
+                       :doc "Rollback inventory reservations on payment failure"
+                       :on-error nil
+                       :schema {:input  [:map
+                                         [:line-items [:vector :any]]]
+                                :output [:map
+                                         [:inventory-reserved? :boolean]
+                                         [:checkout-error :string]]}}
+
+        :confirm      {:id :checkout/confirm-order
+                       :doc "Compile final order summary"
+                       :on-error nil
+                       :schema {:input  [:map
+                                         [:total :double]
+                                         [:discounted-subtotal :double]
+                                         [:tax :double]
+                                         [:shipping :double]
+                                         [:transaction-id :string]]
+                                :output [:map
+                                         [:order-status :keyword]]}}}
+
+ :joins {:fees {:cells    [:calc-tax :calc-ship]
+                :strategy :parallel}}
+
+ :edges {:start     {:valid :discounts, :invalid :end}
+         :discounts {:done :membership}
+         :membership {:done :fees}
+         :fees      {:done :reserve}
+         :reserve   {:done :pay}
+         :pay       {:approved :confirm, :declined :rollback}
+         :rollback  {:done :end}
+         :confirm   {:done :end}}
+
+ :dispatches {:start      [[:valid   (fn [data] (not (:checkout-error data)))]
+                            [:invalid (fn [data] (some? (:checkout-error data)))]]
+              :discounts  [[:done (constantly true)]]
+              :membership [[:done (constantly true)]]
+              :reserve    [[:done (constantly true)]]
+              :pay        [[:approved (fn [data] (= :approved (:payment-status data)))]
+                           [:declined (fn [data] (= :declined (:payment-status data)))]]
+              :rollback   [[:done (constantly true)]]
+              :confirm    [[:done (constantly true)]]}}
