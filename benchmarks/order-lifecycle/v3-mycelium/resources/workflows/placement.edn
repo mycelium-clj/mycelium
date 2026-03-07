@@ -1,0 +1,287 @@
+{:id :order-placement-v3
+
+ :cells
+ {:start
+  {:id  :order/expand-items
+   :doc "Expand items: simple, options (gift-wrap/warranty/subscription), and bundle formats"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:items [:vector :any]]
+             [:catalog :any]
+             [:coupon :any]
+             [:coupons :any]
+             [:membership :keyword]
+             [:state :string]
+             [:county :any]
+             [:card :string]
+             [:gift-card-balance :double]
+             [:store-credit-balance :double]
+             [:loyalty-points :int]
+             [:tax-rates :any]
+             [:county-tax-rules :any]
+             [:currency :string]
+             [:lifetime-spend :double]]
+    :output [:map
+             [:expanded-items [:vector :any]]]}}
+
+  :subscription-pricing
+  {:id  :order/apply-subscription-pricing
+   :doc "15% off base price for subscription items, applied before bulk pricing"
+   :on-error nil
+   :schema
+   {:input  [:map [:expanded-items [:vector :any]]]
+    :output [:map [:expanded-items [:vector :any]]]}}
+
+  :bulk-pricing
+  {:id  :order/apply-bulk-pricing
+   :doc "Quantity discounts: 3-4 units 5% off, 5+ units 10% off, on current-price"
+   :on-error nil
+   :schema
+   {:input  [:map [:expanded-items [:vector :any]]]
+    :output [:map [:expanded-items [:vector :any]]]}}
+
+  :combo75
+  {:id  :order/apply-combo75
+   :doc "COMBO75: $75 off when standalone non-subscription laptop+headphones+novel present"
+   :on-error nil
+   :schema
+   {:input  [:map [:expanded-items [:vector :any]]]
+    :output [:map [:expanded-items [:vector :any]]]}}
+
+  :promotions
+  {:id  :order/apply-promotions
+   :doc "ELEC10 (bundles excluded from count), BUNDLE5 (bundles excluded), order-level %, fixed coupon"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:expanded-items [:vector :any]]
+             [:coupon :any]
+             [:coupons :any]]
+    :output [:map [:expanded-items [:vector :any]]]}}
+
+  :loyalty-redeem
+  {:id  :order/apply-loyalty-redemption
+   :doc "Redeem loyalty points (100 pts = $5), compute discounted subtotal"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:expanded-items [:vector :any]]
+             [:loyalty-points :int]]
+    :output [:map
+             [:expanded-items [:vector :any]]
+             [:redemption-amount :double]
+             [:discounted-subtotal :double]]}}
+
+  ;; --- 4-way parallel join ---
+  :calc-tax
+  {:id  :order/calc-tax
+   :doc "Per-item tax: state base + electronics surcharge + county surcharge, with exemption overrides"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:expanded-items [:vector :any]]
+             [:state :string]
+             [:county :any]
+             [:tax-rates :any]
+             [:county-tax-rules :any]
+             [:catalog :any]]
+    :output [:map
+             [:items-with-tax [:vector :any]]
+             [:total-tax :double]]}}
+
+  :calc-ship
+  {:id  :order/calc-shipping
+   :doc "Tiered weight-based shipping + hazmat ($3/electronics) + oversized ($5 if >4lb) surcharges"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:expanded-items [:vector :any]]
+             [:membership :keyword]]
+    :output [:map
+             [:total-shipping :double]
+             [:shipping-groups :any]]}}
+
+  :calc-gift-wrap
+  {:id  :order/calc-gift-wrap
+   :doc "Gift wrap costs ($2.99 books/digital, $4.99 others) + 8% service tax (0% OR)"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:expanded-items [:vector :any]]
+             [:state :string]]
+    :output [:map
+             [:gift-wrap-total :double]
+             [:gift-wrap-tax :double]]}}
+
+  :calc-warranty
+  {:id  :order/calc-warranty
+   :doc "Per-item warranty (electronics $49.99, clothing $9.99, bundle $59.99) + 8% service tax (0% OR)"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:expanded-items [:vector :any]]
+             [:state :string]]
+    :output [:map
+             [:warranty-total :double]
+             [:warranty-tax :double]]}}
+
+  ;; --- after join ---
+  :compute-total
+  {:id  :order/compute-total
+   :doc "Sum subtotal + tax + shipping + gift-wrap + gift-wrap-tax + warranty + warranty-tax"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:discounted-subtotal :double]
+             [:total-tax :double]
+             [:total-shipping :double]
+             [:gift-wrap-total :double]
+             [:gift-wrap-tax :double]
+             [:warranty-total :double]
+             [:warranty-tax :double]]
+    :output [:map [:total :double]]}}
+
+  :auto-upgrade
+  {:id  :order/auto-upgrade-tier
+   :doc "If lifetime-spend + subtotal crosses tier boundary, recompute shipping and loyalty multiplier"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:discounted-subtotal :double]
+             [:total :double]
+             [:total-shipping :double]
+             [:shipping-groups :any]
+             [:membership :keyword]
+             [:lifetime-spend :double]
+             [:expanded-items [:vector :any]]]
+    :output [:map
+             [:total :double]
+             [:total-shipping :double]
+             [:shipping-groups :any]
+             [:membership :keyword]
+             [:tier-upgraded :boolean]]}}
+
+  :fraud
+  {:id  :order/fraud-check
+   :doc "Reject orders > $5000"
+   :on-error nil
+   :schema
+   {:input  [:map [:total :double]]
+    :output {:approved [:map [:fraud-status :keyword]]
+             :reject   [:map [:fraud-status :keyword]
+                             [:order-error :string]]}}}
+
+  :reserve
+  {:id  :order/reserve-inventory
+   :doc "Reserve inventory, split into fulfilled/backordered based on stock"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:items [:vector :any]]
+             [:expanded-items [:vector :any]]
+             [:catalog :any]]
+    :output [:map
+             [:inventory-reserved :boolean]
+             [:fulfillment :any]]}
+   :requires [:inventory]}
+
+  :pay
+  {:id  :order/process-payment
+   :doc "3-way payment waterfall (GC->SC->CC) with fulfillment charge/hold split"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:total :double]
+             [:card :string]
+             [:gift-card-balance :double]
+             [:store-credit-balance :double]
+             [:fulfillment :any]]
+    :output {:approved [:map
+                        [:payment :any]
+                        [:payment-status :keyword]]
+             :declined [:map
+                        [:payment-status :keyword]
+                        [:order-error :string]]}}}
+
+  :rollback
+  {:id  :order/rollback-inventory
+   :doc "Restore inventory after payment failure"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:items [:vector :any]]
+             [:catalog :any]]
+    :output [:map
+             [:inventory-reserved :boolean]
+             [:order-error :string]]}
+   :requires [:inventory]}
+
+  :finalize
+  {:id  :order/finalize-result
+   :doc "Build items-detail, loyalty points (with tier multiplier), currency display, fulfillment info"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:items-with-tax [:vector :any]]
+             [:discounted-subtotal :double]
+             [:total-tax :double]
+             [:total-shipping :double]
+             [:gift-wrap-total :double]
+             [:gift-wrap-tax :double]
+             [:warranty-total :double]
+             [:warranty-tax :double]
+             [:total :double]
+             [:membership :keyword]
+             [:tier-upgraded :boolean]
+             [:redemption-amount :double]
+             [:currency :string]
+             [:fulfillment :any]]
+    :output [:map
+             [:items-detail [:vector :any]]
+             [:points-earned :int]
+             [:order-status :keyword]
+             [:display-subtotal :double]
+             [:display-tax :double]
+             [:display-shipping :double]
+             [:display-total :double]
+             [:has-subscription :boolean]]}}}
+
+ :joins
+ {:fees {:cells    [:calc-tax :calc-ship :calc-gift-wrap :calc-warranty]
+         :strategy :parallel}}
+
+ :edges
+ {:start               {:done :subscription-pricing}
+  :subscription-pricing {:done :bulk-pricing}
+  :bulk-pricing        {:done :combo75}
+  :combo75             {:done :promotions}
+  :promotions          {:done :loyalty-redeem}
+  :loyalty-redeem      {:done :fees}
+  :fees                {:done :compute-total}
+  :compute-total       {:done :auto-upgrade}
+  :auto-upgrade        {:done :fraud}
+  :fraud               {:approved :reserve
+                        :reject   :end}
+  :reserve             {:done :pay}
+  :pay                 {:approved :finalize
+                        :declined :rollback}
+  :rollback            {:done :end}
+  :finalize            {:done :end}}
+
+ :dispatches
+ {:start               [[:done (constantly true)]]
+  :subscription-pricing [[:done (constantly true)]]
+  :bulk-pricing        [[:done (constantly true)]]
+  :combo75             [[:done (constantly true)]]
+  :promotions          [[:done (constantly true)]]
+  :loyalty-redeem      [[:done (constantly true)]]
+  :compute-total       [[:done (constantly true)]]
+  :auto-upgrade        [[:done (constantly true)]]
+  :fraud               [[:approved (fn [data] (not= :reject (:fraud-status data)))]
+                        [:reject   (fn [data] (= :reject (:fraud-status data)))]]
+  :reserve             [[:done (constantly true)]]
+  :pay                 [[:approved (fn [data] (= :approved (:payment-status data)))]
+                        [:declined (fn [data] (= :declined (:payment-status data)))]]
+  :rollback            [[:done (constantly true)]]
+  :finalize            [[:done (constantly true)]]}}

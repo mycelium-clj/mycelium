@@ -1,0 +1,170 @@
+{:id :order-returns-v3
+
+ :cells
+ {:start
+  {:id  :return/find-items
+   :doc "Match returned items to original order detail records (fulfilled items only)"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:items-detail [:vector :any]]
+             [:discounted-subtotal :double]
+             [:shipping-groups :any]
+             [:payment :any]
+             [:points-earned :int]
+             [:gift-wrap-total :double]
+             [:gift-wrap-tax :double]
+             [:warranty-total :double]
+             [:warranty-tax :double]
+             [:currency :string]
+             [:returned-items [:vector :any]]
+             [:reason :keyword]
+             [:fulfillment :any]]
+    :output [:map
+             [:returned-detail [:vector :any]]]}}
+
+  :calc-restocking
+  {:id  :return/calc-restocking
+   :doc "Changed-mind: per-category restocking fee (bundle=0%). Defective: no fee."
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:returned-detail [:vector :any]]
+             [:reason :keyword]]
+    :output [:map
+             [:restocking-fee :double]]}}
+
+  :calc-refunds
+  {:id  :return/calc-refunds
+   :doc "Compute subtotal (minus restocking), tax, and shipping refunds (tiered+surcharges)"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:returned-detail [:vector :any]]
+             [:items-detail [:vector :any]]
+             [:shipping-groups :any]
+             [:reason :keyword]
+             [:restocking-fee :double]]
+    :output [:map
+             [:subtotal-refund :double]
+             [:tax-refund :double]
+             [:shipping-refund :double]]}}
+
+  :calc-gift-wrap-refund
+  {:id  :return/calc-gift-wrap-refund
+   :doc "Defective: refund gift wrap. Changed-mind: no refund."
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:returned-detail [:vector :any]]
+             [:reason :keyword]
+             [:gift-wrap-total :double]
+             [:gift-wrap-tax :double]]
+    :output [:map
+             [:gift-wrap-refund :double]
+             [:gift-wrap-tax-refund :double]]}}
+
+  :calc-warranty-refund
+  {:id  :return/calc-warranty-refund
+   :doc "Defective: full warranty refund. Changed-mind: 50% warranty refund."
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:returned-detail [:vector :any]]
+             [:reason :keyword]
+             [:warranty-total :double]
+             [:warranty-tax :double]]
+    :output [:map
+             [:warranty-refund :double]
+             [:warranty-tax-refund :double]]}}
+
+  :calc-totals
+  {:id  :return/calc-totals
+   :doc "Sum all refund components: subtotal + tax + shipping + gift-wrap + warranty"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:subtotal-refund :double]
+             [:tax-refund :double]
+             [:shipping-refund :double]
+             [:gift-wrap-refund :double]
+             [:gift-wrap-tax-refund :double]
+             [:warranty-refund :double]
+             [:warranty-tax-refund :double]]
+    :output [:map
+             [:total-refund :double]]}}
+
+  :calc-adjustments
+  {:id  :return/calc-adjustments
+   :doc "Loyalty clawback and 3-way payment refund waterfall"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:subtotal-refund :double]
+             [:total-refund :double]
+             [:discounted-subtotal :double]
+             [:points-earned :int]
+             [:payment :any]]
+    :output [:map
+             [:loyalty-clawback :int]
+             [:payment-refund :any]]}}
+
+  :handle-subscription
+  {:id  :return/handle-subscription
+   :doc "Flag subscription cancellation if returning a subscription item"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:returned-detail [:vector :any]]]
+    :output [:map
+             [:subscription-cancelled :boolean]]}}
+
+  :convert-currency
+  {:id  :return/convert-currency
+   :doc "Add display-* refund fields in original order currency"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:subtotal-refund :double]
+             [:tax-refund :double]
+             [:total-refund :double]
+             [:currency :string]]
+    :output [:map
+             [:display-subtotal-refund :double]
+             [:display-tax-refund :double]
+             [:display-total-refund :double]]}}
+
+  :restore-inventory
+  {:id  :return/restore-inventory
+   :doc "Add returned item quantities back to inventory (bundles restore components)"
+   :on-error nil
+   :schema
+   {:input  [:map
+             [:returned-items [:vector :any]]
+             [:returned-detail [:vector :any]]]
+    :output [:map [:inventory-restored :boolean]]}
+   :requires [:inventory]}}
+
+ :edges
+ {:start               {:done :calc-restocking}
+  :calc-restocking     {:done :calc-refunds}
+  :calc-refunds        {:done :calc-gift-wrap-refund}
+  :calc-gift-wrap-refund {:done :calc-warranty-refund}
+  :calc-warranty-refund {:done :calc-totals}
+  :calc-totals         {:done :calc-adjustments}
+  :calc-adjustments    {:done :handle-subscription}
+  :handle-subscription {:done :convert-currency}
+  :convert-currency    {:done :restore-inventory}
+  :restore-inventory   {:done :end}}
+
+ :dispatches
+ {:start               [[:done (constantly true)]]
+  :calc-restocking     [[:done (constantly true)]]
+  :calc-refunds        [[:done (constantly true)]]
+  :calc-gift-wrap-refund [[:done (constantly true)]]
+  :calc-warranty-refund [[:done (constantly true)]]
+  :calc-totals         [[:done (constantly true)]]
+  :calc-adjustments    [[:done (constantly true)]]
+  :handle-subscription [[:done (constantly true)]]
+  :convert-currency    [[:done (constantly true)]]
+  :restore-inventory   [[:done (constantly true)]]}}
