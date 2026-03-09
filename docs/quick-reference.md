@@ -213,6 +213,8 @@ Key propagation is on by default — cells can return only new/changed keys and 
  :input-schema [:map [:key :type]]                                ;; optional
  :interceptors [{:id :x :scope :all :pre (fn [d] d)}]            ;; optional
  :resilience  {:start {:timeout {:timeout-ms 5000}}}              ;; optional
+ :transforms  {:cell-name {:input  {:fn f :schema {:input [...] :output [...]}}  ;; optional
+                            :output {:fn f :schema {:input [...] :output [...]}}}}
 }
 ```
 
@@ -417,6 +419,74 @@ Scope forms:
 
 Interceptor `:pre`/`:post` receive and return the `data` map (not fsm-state).
 
+## Edge Transforms
+
+Declarative data reshaping at cell boundaries. Transforms run outside the cell handler — the cell stays pure while data is adapted between cells.
+
+### Input Transform (reshape before cell runs)
+
+```clojure
+:transforms {:greet {:input {:fn     (fn [data] (assoc data :name (:user-name data)))
+                              :schema {:input  [:map [:user-name :string]]
+                                       :output [:map [:name :string]]}}}}
+```
+
+The `:fn` runs before the cell's input schema validation. The `:schema` documents what the transform expects and produces, and is validated at compile time against the schema chain.
+
+### Output Transform (reshape after cell runs)
+
+```clojure
+:transforms {:start {:output {:fn     (fn [data] (assoc data :name (:user-name data)))
+                               :schema {:input  [:map [:user-name :string]]
+                                        :output [:map [:name :string]]}}}}
+```
+
+The `:fn` runs after the cell's output schema validation, before the next cell's input validation.
+
+### Edge-Specific Output Transforms (branching cells)
+
+When a cell dispatches to multiple edges, apply different transforms per edge:
+
+```clojure
+:transforms {:classify {:premium {:output {:fn     (fn [data] (assoc data :level (:tier data)))
+                                            :schema {:input  [:map [:tier :keyword]]
+                                                     :output [:map [:level :keyword]]}}}
+                         :basic   {:output {:fn     (fn [data] (assoc data :category (name (:tier data))))
+                                            :schema {:input  [:map [:tier :keyword]]
+                                                     :output [:map [:category :string]]}}}}}
+```
+
+Only the transform for the taken edge is applied.
+
+### Combining Input and Edge-Specific Output Transforms
+
+```clojure
+:transforms {:classify {:input   {:fn     (fn [data] (assoc data :score (:raw-value data)))
+                                   :schema {:input  [:map [:raw-value :int]]
+                                            :output [:map [:score :int]]}}
+                         :premium {:output {:fn     (fn [data] (assoc data :level (:tier data)))
+                                            :schema {:input  [:map [:tier :keyword]]
+                                                     :output [:map [:level :keyword]]}}}
+                         :basic   {:output {:fn     (fn [data] (assoc data :category (name (:tier data))))
+                                            :schema {:input  [:map [:tier :keyword]]
+                                                     :output [:map [:category :string]]}}}}}
+```
+
+### When to Use Transforms vs. Cells
+
+- **Transforms** — mechanical key renaming, type adaptation, or structural reshaping between cells that don't share a schema contract. Zero runtime overhead beyond the function call.
+- **New cell** — when the reshaping involves domain logic, side effects, or is complex enough to warrant its own schema and tests.
+
+### Transform Spec
+
+Each transform is `{:fn f, :schema {:input [...] :output [...]}}`:
+
+- `:fn` — `(fn [data] -> data)`, a pure function that reshapes the data map
+- `:schema :input` — Malli schema documenting what the transform expects
+- `:schema :output` — Malli schema documenting what the transform produces
+
+Both schemas are validated at compile time. The schema chain validator uses transform schemas to verify key availability across cells.
+
 ## Parameterized Cells
 
 Reuse the same handler with different config by passing a map instead of a bare keyword:
@@ -583,6 +653,7 @@ Declare compile-time path invariants that are checked against all enumerated pat
 - **Error groups** — grouped cells exist, error handler exists, no cell in multiple groups
 - **Resilience validation** — policy keys valid, referenced cells exist, timeout-ms positive
 - **Join validation** — member cells exist, no name collisions, members have no edges, output keys disjoint (or `:merge-fn` provided)
+- **Transform validation** — referenced cells exist, edge labels match cell's edges, each spec has `:fn` (function) and valid `:schema`
 
 ## Edge Targets
 

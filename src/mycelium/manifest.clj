@@ -322,4 +322,5 @@
       (:joins manifest) (assoc :joins (:joins manifest))
       (:input-schema manifest) (assoc :input-schema (:input-schema manifest))
       (:interceptors manifest) (assoc :interceptors (:interceptors manifest))
-      (:resilience manifest) (assoc :resilience (:resilience manifest)))))
+      (:resilience manifest) (assoc :resilience (:resilience manifest))
+      (:transforms manifest) (assoc :transforms (:transforms manifest)))))

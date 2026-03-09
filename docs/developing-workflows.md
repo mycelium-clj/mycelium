@@ -413,6 +413,28 @@ Once the core logic works, layer on operational concerns:
 
 These are declared in the workflow definition — cell handlers stay focused on domain logic.
 
+### Add Edge Transforms
+
+When integrating cells with mismatched key names — especially when reusing existing cells from different contexts — use edge transforms instead of modifying cell handlers or adding adapter cells:
+
+```clojure
+;; Cell A produces :user-name, Cell B expects :name
+:transforms {:cell-a {:output {:fn     (fn [data] (assoc data :name (:user-name data)))
+                                :schema {:input  [:map [:user-name :string]]
+                                         :output [:map [:name :string]]}}}}
+```
+
+Transforms are validated at compile time — their schemas participate in the schema chain validation, catching mismatches before runtime.
+
+For branching cells, apply different transforms per edge when downstream cells have different contracts:
+
+```clojure
+:transforms {:classify {:premium {:output {:fn ... :schema ...}}
+                         :basic   {:output {:fn ... :schema ...}}}}
+```
+
+**When to use transforms vs. cells:** Transforms are for mechanical reshaping (key renaming, structural mapping). If the reshaping involves domain logic or needs its own tests, make it a cell.
+
 ### Add Constraints
 
 Declare structural invariants once the graph is stable:
