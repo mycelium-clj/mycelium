@@ -204,36 +204,9 @@ Both work, but the second is idiomatic. Key propagation is on by default.
 
 If the spec says items are `[{"laptop" 1} {"shirt" 2}]`, keep that format. Mycelium doesn't impose any format on your data — it flows whatever you put in. Match the domain spec exactly.
 
-### 3. Forgetting to round
+### 3. Returning nil from a cell
 
-Use explicit rounding for financial calculations:
-
-```clojure
-(defn round2 [x]
-  (.doubleValue (.setScale (bigdec x) 2 java.math.RoundingMode/HALF_UP)))
-```
-
-Malli schemas don't check decimal precision. Round explicitly in handlers.
-
-### 4. Non-atomic state mutations
-
-When multiple items need updating (e.g., inventory), use a single `swap!`:
-
-```clojure
-;; WRONG — partial failure leaves inconsistent state
-(doseq [[id qty] items] (swap! inventory update id - qty))
-
-;; RIGHT — atomic update
-(swap! inventory (fn [inv] (reduce (fn [m [id qty]] (update m id - qty)) inv items)))
-```
-
-### 5. Returning nil from a cell
-
-Cell handlers must return a map. Returning `nil` causes downstream failures. If a cell has nothing to add, return `{}`.
-
-### 6. Using exact equality for floats in tests
-
-Use exact equality (`=`) not tolerance-based comparison. With explicit `round2`, results are deterministic.
+Cell handlers must return a map! Returning `nil` causes downstream failures. If a cell has nothing to add, return `{}`.
 
 ---
 
