@@ -858,13 +858,12 @@ A cell can pause the workflow by returning `:mycelium/halt` in its data. The wor
 ### Halting
 
 ```clojure
-;; Cell signals halt by assoc'ing :mycelium/halt into data
-(defmethod cell/cell-spec :review/check [_]
-  {:id      :review/check
-   :handler (fn [_ data]
-              (assoc data :mycelium/halt {:reason :needs-approval
-                                          :item   (:item-id data)}))
-   :schema  {:input [:map [:item-id :string]] :output [:map]}})
+;; Cell signals halt by returning :mycelium/halt in its output
+(cell/defcell :review/check
+  {:input [:map [:item-id :string]] :output [:map]}
+  (fn [_ data]
+    {:mycelium/halt {:reason :needs-approval
+                     :item   (:item-id data)}}))
 ```
 
 `:mycelium/halt` can be `true` or a map with context for the human reviewer.

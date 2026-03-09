@@ -140,12 +140,11 @@ At compile time, the framework:
 The error handler receives the full data map with `:mycelium/error`:
 
 ```clojure
-(defmethod cell/cell-spec :data/handle-error [_]
-  {:id      :data/handle-error
-   :handler (fn [_ data]
-              (let [{:keys [cell message]} (:mycelium/error data)]
-                {:error-page (str "Failed at " (name cell) ": " message)}))
-   :schema  {:input [:map] :output [:map [:error-page :string]]}})
+(cell/defcell :data/handle-error
+  {:input [:map] :output [:map [:error-page :string]]}
+  (fn [_ data]
+    (let [{:keys [cell message]} (:mycelium/error data)]
+      {:error-page (str "Failed at " (name cell) ": " message)})))
 ```
 
 ### Error Recovery
@@ -153,14 +152,13 @@ The error handler receives the full data map with `:mycelium/error`:
 An error handler can clear the error and attempt recovery:
 
 ```clojure
-(defmethod cell/cell-spec :order/retry-with-backup [_]
-  {:id      :order/retry-with-backup
-   :handler (fn [{:keys [backup-gateway]} data]
-              (let [{:keys [cell message]} (:mycelium/error data)]
-                (log/warn "Primary failed at" cell ":" message)
-                (-> (dissoc data :mycelium/error)
-                    (assoc :result (call-backup backup-gateway data)))))
-   :schema  {:input [:map] :output [:map [:result :string]]}})
+(cell/defcell :order/retry-with-backup
+  {:input [:map] :output [:map [:result :string]]}
+  (fn [{:keys [backup-gateway]} data]
+    (let [{:keys [cell message]} (:mycelium/error data)]
+      (log/warn "Primary failed at" cell ":" message)
+      (-> (dissoc data :mycelium/error)
+          (assoc :result (call-backup backup-gateway data))))))
 ```
 
 If the recovery cell itself throws and is in an error group, the error routes to its group's handler.
@@ -433,14 +431,13 @@ Pass correlation IDs or request context through the workflow using data keys:
 
 ;; Every cell receives :request-id and :user-id via key propagation
 ;; Include in error handling:
-(defmethod cell/cell-spec :app/handle-error [_]
-  {:id      :app/handle-error
-   :handler (fn [_ data]
-              (log/error {:request-id (:request-id data)
-                          :user-id    (:user-id data)
-                          :error      (:mycelium/error data)})
-              {:error-page "Something went wrong"})
-   :schema  {:input [:map] :output [:map [:error-page :string]]}})
+(cell/defcell :app/handle-error
+  {:input [:map] :output [:map [:error-page :string]]}
+  (fn [_ data]
+    (log/error {:request-id (:request-id data)
+                :user-id    (:user-id data)
+                :error      (:mycelium/error data)})
+    {:error-page "Something went wrong"}))
 ```
 
 ### Structured Error Responses for APIs

@@ -157,16 +157,15 @@ Each cell is implemented independently. A cell needs only its own schema to be i
 Every cell follows the same pattern:
 
 ```clojure
-(defmethod cell/cell-spec :loan/classify-risk [_]
-  {:id      :loan/classify-risk
-   :handler (fn [_resources data]
-              (let [score (:credit-score data)]
-                {:risk-level (cond
-                               (>= score 720) :low
-                               (>= score 620) :medium
-                               :else          :high)}))
-   :schema  {:input  [:map [:credit-score :int]]
-             :output [:map [:risk-level [:enum :low :medium :high]]]}})
+(cell/defcell :loan/classify-risk
+  {:input  [:map [:credit-score :int]]
+   :output [:map [:risk-level [:enum :low :medium :high]]]}
+  (fn [_resources data]
+    (let [score (:credit-score data)]
+      {:risk-level (cond
+                     (>= score 720) :low
+                     (>= score 620) :medium
+                     :else          :high)})))
 ```
 
 Key principles:
@@ -178,19 +177,18 @@ Key principles:
 **Side effects through resources.** When a cell needs a database or API, it receives it via the resources map:
 
 ```clojure
-(defmethod cell/cell-spec :loan/credit-bureau-lookup [_]
-  {:id       :loan/credit-bureau-lookup
-   :handler  (fn [{:keys [credit-db]} data]
-               (let [history (get credit-db (:applicant-name data))]
-                 {:credit-history (or history {:accounts 0 :late-payments 0
-                                               :bankruptcies 0 :years-of-history 0})}))
-   :schema   {:input  [:map [:applicant-name :string]]
-              :output [:map [:credit-history [:map
-                                              [:accounts :int]
-                                              [:late-payments :int]
-                                              [:bankruptcies :int]
-                                              [:years-of-history :int]]]]}
-   :requires [:credit-db]})
+(cell/defcell :loan/credit-bureau-lookup
+  {:input    [:map [:applicant-name :string]]
+   :output   [:map [:credit-history [:map
+                                      [:accounts :int]
+                                      [:late-payments :int]
+                                      [:bankruptcies :int]
+                                      [:years-of-history :int]]]]
+   :requires [:credit-db]}
+  (fn [{:keys [credit-db]} data]
+    (let [history (get credit-db (:applicant-name data))]
+      {:credit-history (or history {:accounts 0 :late-payments 0
+                                     :bankruptcies 0 :years-of-history 0})})))
 ```
 
 This keeps the cell testable — pass a mock `credit-db` in tests.
