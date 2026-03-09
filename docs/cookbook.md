@@ -627,6 +627,338 @@ Interceptor `:pre`/`:post` receive and return the data map. Scope forms: `:all`,
 
 ---
 
+## Recover From Individual Cell Failures
+
+**Problem:** A specific cell might fail, and you want a targeted recovery path without grouping it with other cells.
+
+```clojure
+(def workflow
+  {:cells {:start     :order/process-payment
+           :confirm   :order/send-confirmation
+           :retry-pay :order/retry-with-backup
+           :err       :order/payment-failed}
+
+   :edges {:start     {:done :confirm, :on-error :retry-pay}
+           :retry-pay {:done :confirm, :on-error :err}
+           :confirm   :end
+           :err       :end}
+
+   :dispatches {:start     [[:done     (fn [d] (nil? (:mycelium/error d)))]
+                            [:on-error (fn [d] (some? (:mycelium/error d)))]]
+                :retry-pay [[:done     (fn [d] (nil? (:mycelium/error d)))]
+                            [:on-error (fn [d] (some? (:mycelium/error d)))]]}
+
+   :error-groups {:payment {:cells [:start :retry-pay]
+                             :on-error :err}}})
+```
+
+The error handler cell can inspect what went wrong:
+
+```clojure
+(defmethod cell/cell-spec :order/retry-with-backup [_]
+  {:id      :order/retry-with-backup
+   :handler (fn [{:keys [backup-gateway]} data]
+              (let [{:keys [cell message]} (:mycelium/error data)]
+                (log/warn "Primary payment failed at" cell ":" message)
+                ;; Clear the error and retry with backup
+                (-> (dissoc data :mycelium/error)
+                    (assoc :payment-result
+                           (charge backup-gateway (:card data) (:total data))))))
+   :schema {:input [:map [:card :string] [:total :double]]
+            :output [:map [:payment-result :string]]}})
+```
+
+---
+
+## Route a Multi-Way Decision
+
+**Problem:** A cell needs to route to 3+ different paths based on its output.
+
+```clojure
+(def workflow
+  {:cells {:start    :loan/evaluate
+           :approve  :loan/auto-approve
+           :reject   :loan/auto-reject
+           :review   :loan/queue-review
+           :notify   :loan/send-notification}
+
+   :edges {:start   {:approve :approve, :reject :reject, :review :review}
+           :approve :notify
+           :reject  :notify
+           :review  :notify
+           :notify  :end}
+
+   :dispatches {:start [[:approve (fn [d] (= :approve (:decision d)))]
+                        [:reject  (fn [d] (= :reject (:decision d)))]
+                        [:review  (fn [d] (= :review (:decision d)))]]}})
+```
+
+This is a **diamond pattern** — three branches converge to `:notify`. Each branch runs its own logic, then all paths flow into the same downstream cell. The converging cell's input schema should accept the union of what any upstream branch produces.
+
+---
+
+## Handle Partial Failures in Parallel Joins
+
+**Problem:** You run multiple cells in parallel, but some may fail while others succeed.
+
+```clojure
+(def workflow
+  {:cells {:start    :order/validate
+           :tax      :order/calc-tax
+           :shipping :order/calc-shipping
+           :discount :order/apply-discount
+           :total    :order/compute-total
+           :partial  :order/partial-recovery}
+
+   :joins {:fees {:cells    [:tax :shipping :discount]
+                  :strategy :parallel}}
+
+   :edges {:start   :fees
+           :fees    {:done :total, :failure :partial}
+           :total   :end
+           :partial :end}})
+```
+
+When any join member throws, `:mycelium/join-error` is set on data with details of which members failed. The `:failure` edge is auto-dispatched. The recovery cell can inspect partial results:
+
+```clojure
+(defmethod cell/cell-spec :order/partial-recovery [_]
+  {:id      :order/partial-recovery
+   :handler (fn [_ data]
+              (let [errors (:mycelium/join-error data)]
+                ;; errors is a seq of {:cell-id :order/calc-shipping, :cell :shipping, ...}
+                ;; Successfully completed members' outputs are already merged into data
+                {:order-note (str "Completed with " (count errors) " service(s) unavailable")
+                 :total (or (:tax data) 0)}))
+   :schema {:input [:map] :output [:map [:order-note :string] [:total number?]]}})
+```
+
+### Resolving Output Key Conflicts
+
+When parallel members produce overlapping keys, provide a `:merge-fn`:
+
+```clojure
+:joins {:fetch-all {:cells    [:fetch-a :fetch-b]
+                    :strategy :parallel
+                    :merge-fn (fn [data results]
+                                ;; results is {member-name -> member-output}
+                                (assoc data :items
+                                       (concat (get-in results [:fetch-a :items])
+                                               (get-in results [:fetch-b :items]))))}}
+```
+
+Without `:merge-fn`, overlapping output keys cause a compile-time error.
+
+---
+
+## Sequential Join for Ordered Dependencies
+
+**Problem:** Multiple steps need to run in a join group but order matters.
+
+```clojure
+:joins {:setup {:cells    [:create-account :provision-db :seed-data]
+                :strategy :sequential}}
+```
+
+`:sequential` runs members in the order listed. Each member gets the **original input snapshot** (not the prior member's output). Use this when steps have ordering requirements but don't depend on each other's output.
+
+---
+
+## Build a Decision Chain (If/Else-If/Else)
+
+**Problem:** You need a cascading series of checks — try A, if not B, if not C.
+
+```clojure
+(def workflow
+  {:cells {:start     :route/classify
+           :premium   :route/premium-handler
+           :standard  :route/standard-handler
+           :basic     :route/basic-handler}
+
+   :edges {:start {:premium :premium, :standard :standard, :default :basic}
+           :premium  :end
+           :standard :end
+           :basic    :end}
+
+   :dispatches {:start [[:premium  (fn [d] (= :premium (:tier d)))]
+                        [:standard (fn [d] (= :standard (:tier d)))]]}})
+```
+
+The `:default` edge fires only when no predicate matches — it's the else branch. No dispatch entry needed for `:default`.
+
+---
+
+## Pass External Dependencies via Resources
+
+**Problem:** Cells need database connections, HTTP clients, or configuration that shouldn't flow through the data map.
+
+```clojure
+;; Declare what a cell needs
+(defmethod cell/cell-spec :user/lookup [_]
+  {:id       :user/lookup
+   :requires [:db]
+   :handler  (fn [{:keys [db]} data]
+               {:user (db/find-user db (:user-id data))})
+   :schema   {:input  [:map [:user-id :string]]
+              :output [:map [:user [:map [:name :string] [:email :string]]]]}})
+
+;; Provide resources at run time
+(myc/run-compiled compiled
+  {:db (get-connection-pool)
+   :http (http/client)}
+  {:user-id "alice"})
+```
+
+Resources are the first argument to every handler. Use them for:
+- Database connections / connection pools
+- HTTP clients
+- Configuration maps
+- Caches
+- External service clients
+
+Data map is for **workflow state** (what flows between cells). Resources are for **infrastructure** (shared across cells, never serialized).
+
+### Per-Request Resources
+
+```clojure
+;; In Ring middleware — resources can vary per request
+(mw/workflow-handler compiled
+  {:resources (fn [req]
+                {:db db-pool
+                 :current-user (:identity req)
+                 :request-id (str (random-uuid))})})
+```
+
+---
+
+## Manage Data Flow Across Cells
+
+**Problem:** You want to understand how data accumulates and flows through a workflow.
+
+### Key Propagation (Default: On)
+
+With key propagation, every cell receives all keys from all prior cells:
+
+```clojure
+;; Cell A returns {:tax 10.0}
+;; Cell B receives {:subtotal 100.0, :tax 10.0} (A's output merged with input)
+;; Cell B returns {:total 110.0}
+;; Cell C receives {:subtotal 100.0, :tax 10.0, :total 110.0}
+```
+
+Handlers only return **new or changed keys**. The framework merges them with the accumulated state. Handler output takes precedence on key conflicts.
+
+### Design Schema Chains
+
+Each cell's input schema should declare only the keys it actually reads. Each cell's output schema should declare only the keys it adds:
+
+```clojure
+;; Cell A
+:schema {:input  [:map [:raw-text :string]]
+         :output [:map [:tokens [:vector :string]]]}
+
+;; Cell B — can use :raw-text (propagated) and :tokens (from A)
+:schema {:input  [:map [:tokens [:vector :string]]]
+         :output [:map [:word-count :int]]}
+
+;; Cell C — can use all three accumulated keys
+:schema {:input  [:map [:tokens [:vector :string]] [:word-count :int]]
+         :output [:map [:summary :string]]}
+```
+
+The framework validates schema chains at compile time — it checks that every key a cell requires is available from some upstream cell's output or the initial workflow input.
+
+### Explicit Control
+
+Disable key propagation when you need full control:
+
+```clojure
+(myc/pre-compile workflow {:propagate-keys? false})
+;; Now each cell must return ALL keys the next cell needs
+```
+
+---
+
+## Validate Workflow Input Before Running
+
+**Problem:** Reject invalid initial data before any cells execute.
+
+```clojure
+(def workflow
+  {:cells {:start :app/process}
+   :edges {:start :end}
+   :input-schema [:map
+                  [:user-id :string]
+                  [:amount [:and :double [:> 0]]]]})
+
+(let [result (myc/run-workflow workflow {} {:user-id 123 :amount -5})]
+  (when-let [err (:mycelium/input-error result)]
+    ;; Workflow didn't run — input was invalid
+    (println "Bad input:" (:errors err))))
+```
+
+`:input-schema` is validated before the first cell runs. If validation fails, `:mycelium/input-error` is set and no cells execute.
+
+---
+
+## Diagnose Schema Failures
+
+**Problem:** A schema validation fails at runtime and you need to quickly identify which cell and which keys caused it.
+
+```clojure
+(let [result (myc/run-workflow wf resources data)]
+  (when-let [{:keys [cell-name cell-id message failed-keys cell-path]}
+             (myc/workflow-error result)]
+    ;; message: "Schema input validation failed at step-b (:app/step-b) — failing keys: (:amount :name)"
+    (println message)
+
+    ;; Inspect each failing key
+    (doseq [[k {:keys [value type message]}] failed-keys]
+      (println "  " k "=" value "(" type ")" "-" message))
+    ;; :amount = 949.5 (java.lang.Double) - should be an integer
+    ;; :name = nil (nil) - missing required key
+
+    ;; See execution path leading to failure
+    (println "Path:" cell-path)))
+    ;; Path: [:validate :transform]
+```
+
+The error map includes:
+- `:cell-name` — workflow cell name (e.g., `:step-b`)
+- `:cell-id` — cell spec ID (e.g., `:app/step-b`)
+- `:failed-keys` — per-key diagnostics with actual value, Java type, and Malli message
+- `:cell-path` — cells that ran successfully before the failure
+- `:message` — human-readable summary with cell name and failing keys
+
+---
+
+## Combine Timeouts with Fallback Logic
+
+**Problem:** A cell should try a fast path, fall back to a slower path on timeout, and fail gracefully if both timeout.
+
+```clojure
+(def workflow
+  {:cells {:start    :data/fetch-primary
+           :slow     :data/fetch-secondary
+           :process  :data/process
+           :fallback :data/use-cached}
+
+   :edges {:start   {:done :process, :timeout :slow}
+           :slow    {:done :process, :timeout :fallback}
+           :process :end
+           :fallback :end}
+
+   :dispatches {:start [[:done (fn [d] (not (:mycelium/timeout d)))]]
+                :slow  [[:done (fn [d] (not (:mycelium/timeout d)))]]}
+
+   :timeouts {:start 2000     ;; 2s for primary
+              :slow  10000}}) ;; 10s for secondary
+```
+
+Graph-level `:timeouts` route to a fallback cell via the `:timeout` dispatch (auto-injected). This is different from resilience `:timeout` which sets `:mycelium/resilience-error`.
+
+---
+
 ## Common Patterns
 
 ### Errors Are Data, Not Exceptions
