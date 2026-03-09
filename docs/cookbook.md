@@ -273,7 +273,7 @@ Graph-level timeouts **route** to a fallback cell. Resilience timeouts **error**
 ```clojure
 (let [result (myc/run-workflow wf resources data)]
   (if (myc/error? result)
-    (let [{:keys [error-type cell-id cell message details]} (myc/workflow-error result)]
+    (let [{:keys [error-type cell-id cell-name cell message details]} (myc/workflow-error result)]
       (case error-type
         :schema/input   (log/warn "Bad input at" cell-id)
         :schema/output  (log/warn "Bad output at" cell-id)
@@ -286,7 +286,7 @@ Graph-level timeouts **route** to a fallback cell. Resilience timeouts **error**
     (handle-success result)))
 ```
 
-`workflow-error` returns nil on success, or a map with `:error-type`, `:message`, `:details` (plus `:cell-id`, `:cell`, `:cell-path`, `:failed-keys` where applicable).
+`workflow-error` returns nil on success, or a map with `:error-type`, `:message`, `:details` (plus `:cell-id`, `:cell-name`, `:cell`, `:cell-path`, `:failed-keys` where applicable). The `:message` includes the cell name and specific failing keys for easy diagnosis.
 
 ---
 

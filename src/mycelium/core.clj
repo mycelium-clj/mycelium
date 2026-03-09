@@ -242,14 +242,24 @@
 
     ;; Schema validation error (input or output)
     (:mycelium/schema-error result)
-    (let [err (:mycelium/schema-error result)]
-      {:error-type (keyword "schema" (name (:phase err)))
-       :cell-id    (:cell-id err)
-       :cell-path  (:cell-path err)
-       :failed-keys (:failed-keys err)
-       :message    (str "Schema " (name (:phase err)) " validation failed at "
-                        (:cell-id err) ": " (:errors err))
-       :details    err})
+    (let [err       (:mycelium/schema-error result)
+          cell-name (:cell-name err)
+          cell-id   (:cell-id err)
+          fk        (:failed-keys err)
+          key-names (when fk (keys fk))
+          cell-label (if cell-name
+                       (str cell-name " (" cell-id ")")
+                       (str cell-id))]
+      (cond-> {:error-type  (keyword "schema" (name (:phase err)))
+               :cell-id     cell-id
+               :cell-path   (:cell-path err)
+               :failed-keys fk
+               :message     (str "Schema " (name (:phase err)) " validation failed at "
+                                 cell-label
+                                 (when (seq key-names)
+                                   (str " — failing keys: " (pr-str key-names))))
+               :details     err}
+        cell-name (assoc :cell-name cell-name)))
 
     ;; Handler exception (error groups)
     (:mycelium/error result)

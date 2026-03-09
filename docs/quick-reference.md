@@ -832,7 +832,7 @@ Implement the protocol for your persistence backend (DB, Redis, etc.):
 |-----|-------------|
 | `:mycelium/trace` | Vector of execution trace entries (see Workflow Trace) |
 | `:mycelium/input-error` | Input schema validation failure (workflow didn't run) |
-| `:mycelium/schema-error` | Runtime schema violation details (includes `:failed-keys`, `:cell-path`, clean `:data`) |
+| `:mycelium/schema-error` | Runtime schema violation details (includes `:message`, `:cell-name`, `:failed-keys`, `:cell-path`, clean `:data`) |
 | `:mycelium/join-error` | Join node error details |
 | `:mycelium/timeout` | `true` when a cell exceeded its graph-level timeout |
 | `:mycelium/error` | Error group error details (`{:cell :name, :message "..."}`) |
@@ -849,7 +849,9 @@ Instead of checking individual keys, use `workflow-error` and `error?`:
 ```clojure
 (myc/error? result)           ;; => true/false
 (myc/workflow-error result)   ;; => {:error-type :schema/output, :cell-id :app/step,
-                              ;;     :message "...", :details {...}} or nil
+                              ;;     :cell-name :step, :failed-keys {:x {...}},
+                              ;;     :message "Schema output validation failed at step (:app/step) — failing keys: (:x)",
+                              ;;     :details {...}} or nil
 ```
 
 Error types: `:schema/input`, `:schema/output`, `:handler`, `:resilience/timeout`, `:resilience/circuit-open`, `:resilience/bulkhead-full`, `:resilience/rate-limited`, `:join`, `:timeout`, `:input`.
