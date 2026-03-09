@@ -224,36 +224,42 @@
   "Creates a Maestro pre-interceptor that validates input schemas.
    `state->cell` is a map of state-id → cell-spec.
    `opts` — optional map:
-     `:coerce?`      — when true, coerces data before validation.
-     `:state->names` — map of state-id → cell-name keyword for error messages.
+     `:coerce?`          — when true, coerces data before validation.
+     `:state->names`     — map of state-id → cell-name keyword for error messages.
+     `:input-transforms` — map of state-id → (fn [data] -> data), applied before validation.
    Skips terminal states."
   ([state->cell] (make-pre-interceptor state->cell {}))
   ([state->cell opts]
-   (let [coerce?      (:coerce? opts)
-         state->names (:state->names opts)]
+   (let [coerce?          (:coerce? opts)
+         state->names     (:state->names opts)
+         input-transforms (:input-transforms opts)]
      (fn [fsm-state _resources]
        (let [state-id (:current-state-id fsm-state)]
          (if (contains? terminal-states state-id)
            fsm-state
            (if-let [cell (get state->cell state-id)]
-             (if coerce?
-               (let [result (coerce-input cell (:data fsm-state))]
-                 (if (:error result)
+             (let [;; Apply input transform before validation
+                   fsm-state (if-let [xf (get input-transforms state-id)]
+                               (update fsm-state :data xf)
+                               fsm-state)]
+               (if coerce?
+                 (let [result (coerce-input cell (:data fsm-state))]
+                   (if (:error result)
+                     (-> fsm-state
+                         (assoc :current-state-id ::fsm/error)
+                         (assoc-in [:data :mycelium/schema-error]
+                                   (-> (:error result)
+                                       (attach-cell-path (:data fsm-state))
+                                       (attach-cell-name state-id state->names))))
+                     (assoc fsm-state :data (:data result))))
+                 (if-let [error (validate-input cell (:data fsm-state))]
                    (-> fsm-state
                        (assoc :current-state-id ::fsm/error)
                        (assoc-in [:data :mycelium/schema-error]
-                                 (-> (:error result)
+                                 (-> error
                                      (attach-cell-path (:data fsm-state))
                                      (attach-cell-name state-id state->names))))
-                   (assoc fsm-state :data (:data result))))
-               (if-let [error (validate-input cell (:data fsm-state))]
-                 (-> fsm-state
-                     (assoc :current-state-id ::fsm/error)
-                     (assoc-in [:data :mycelium/schema-error]
-                               (-> error
-                                   (attach-cell-path (:data fsm-state))
-                                   (attach-cell-name state-id state->names))))
-                 fsm-state))
+                   fsm-state)))
              fsm-state)))))))
 
 (defn make-post-interceptor
@@ -271,8 +277,9 @@
   ([state->cell state->edge-targets state->names]
    (make-post-interceptor state->cell state->edge-targets state->names {}))
   ([state->cell state->edge-targets state->names opts]
-   (let [coerce?  (:coerce? opts)
-         on-trace (:on-trace opts)]
+   (let [coerce?           (:coerce? opts)
+         on-trace          (:on-trace opts)
+         output-transforms (:output-transforms opts)]
      (fn [fsm-state _resources]
        (let [state-id (:last-state-id fsm-state)]
          (if (or (nil? state-id)
@@ -297,6 +304,15 @@
                    ;; Use coerced data when available
                    data (if (and coerce? (not skip-validation?) (not error))
                           (:data coerce-result)
+                          data)
+                   ;; Apply output transform if present (only on success)
+                   data (if (and (nil? error) (not skip-validation?))
+                          (if-let [xf-lookup (get output-transforms state-id)]
+                            (let [xf (if (map? xf-lookup)
+                                       (get xf-lookup transition)
+                                       xf-lookup)]
+                              (if xf (xf data) data))
+                            data)
                           data)
                    ;; Extract duration-ms from the latest Maestro trace segment
                    duration-ms (some-> (:trace fsm-state) last :duration-ms)

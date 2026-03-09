@@ -411,6 +411,55 @@ Each trace entry: `{:cell :name, :cell-id :ns/id, :transition :label, :duration-
 
 ---
 
+## Reshape Data Between Cells (Edge Transforms)
+
+**Problem:** Two cells don't share the same key names — one produces `:user-name` but the next expects `:name`. You don't want to modify either cell.
+
+```clojure
+(def workflow
+  {:cells {:start :user/lookup
+           :greet :user/greet}
+   :edges {:start :greet, :greet :end}
+   :transforms {:start {:output {:fn     (fn [data] (assoc data :name (:user-name data)))
+                                  :schema {:input  [:map [:user-name :string]]
+                                           :output [:map [:name :string]]}}}}})
+```
+
+The output transform runs after `:start`'s handler and output validation, before `:greet`'s input validation. The cell handlers stay untouched.
+
+### Branching Cells with Different Downstream Contracts
+
+When a branching cell feeds different cells that expect different key shapes:
+
+```clojure
+:transforms {:classify {:premium {:output {:fn     (fn [data] (assoc data :level (:tier data)))
+                                            :schema {:input  [:map [:tier :keyword]]
+                                                     :output [:map [:level :keyword]]}}}
+                         :basic   {:output {:fn     (fn [data] (assoc data :category (name (:tier data))))
+                                            :schema {:input  [:map [:tier :keyword]]
+                                                     :output [:map [:category :string]]}}}}}
+```
+
+Only the transform for the taken edge is applied. The schema chain validator checks each path independently.
+
+### Input Transform (reshape before cell runs)
+
+When a cell needs data in a different shape than what upstream produces:
+
+```clojure
+:transforms {:process {:input {:fn     (fn [data] (assoc data :score (:raw-value data)))
+                                :schema {:input  [:map [:raw-value :int]]
+                                         :output [:map [:score :int]]}}}}
+```
+
+Input transforms run before the cell's input schema validation.
+
+### When to Use Transforms vs. Adding a Cell
+
+Use **transforms** for mechanical reshaping (key renaming, type coercion, structural mapping). Use a **new cell** when the logic involves domain decisions, side effects, or is complex enough to deserve its own test coverage.
+
+---
+
 ## Handle Type Mismatches Between Cells
 
 **Problem:** One cell produces a `double` but the next expects an `int`.
