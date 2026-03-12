@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "delegator": {
+      "command": "node",
+      "args": ["index.js"],
+      "cwd": "/Users/yogthos/src/mycelium-clj/delegator",
+      "env": {
+        "DEEPSEEK_API_KEY": "${DEEPSEEK_API_KEY}",
+        "DEEPSEEK_BASE_URL": "https://api.deepseek.com",
+        "DEEPSEEK_MODEL": "deepseek-chat"
+      }
+    }
+  }
+}
