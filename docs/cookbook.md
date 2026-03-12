@@ -298,8 +298,8 @@ Graph-level timeouts **route** to a fallback cell. Resilience timeouts **error**
 (require '[mycelium.cell :as cell])
 
 (cell/defcell :order/compute-tax
-  {:input  [:map [:subtotal :double] [:tax-rate :double]]
-   :output [:map [:tax :double]]}
+  {:input  {:subtotal :double, :tax-rate :double}
+   :output {:tax :double}}
   (fn [resources data]
     ;; With key propagation (default): return only new keys
     {:tax (* (:subtotal data) (:tax-rate data))}))

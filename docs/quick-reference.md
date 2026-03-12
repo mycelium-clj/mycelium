@@ -153,6 +153,7 @@ mentally reconstruct the architecture from.
  :on-end   (fn [resources fsm-state] data)        ;; runs when FSM enters end state
  :coerce?  true                                    ;; auto-coerce numeric types (int↔double)
  :propagate-keys? false                             ;; disable auto key propagation (on by default)
+ :validate :warn                                    ;; :strict (default), :warn, or :off
  :on-trace (fn [entry] ...)}                        ;; callback after each cell completes
 ```
 
@@ -185,7 +186,13 @@ Key propagation is on by default — cells can return only new/changed keys and 
 (cell/defcell :namespace/cell-id
   (fn [resources data] {:result "value"}))
 
-;; With schema
+;; With schema (lite syntax — recommended)
+(cell/defcell :namespace/cell-id
+  {:input  {:key :type}
+   :output {:result :string}}
+  (fn [resources data] {:result "value"}))
+
+;; With schema (full Malli vector syntax)
 (cell/defcell :namespace/cell-id
   {:input  [:map [:key :type]]
    :output [:map [:result :string]]}
@@ -193,8 +200,8 @@ Key propagation is on by default — cells can return only new/changed keys and 
 
 ;; With schema + options
 (cell/defcell :namespace/cell-id
-  {:input    [:map [:key :type]]
-   :output   [:map [:result :string]]
+  {:input    {:key :type}
+   :output   {:result :string}
    :doc      "..."
    :requires [:db]
    :async?   true}
@@ -628,6 +635,29 @@ Default dispatches `:success` / `:failure` are provided automatically based on `
 
 Output schema is inferred automatically by walking child workflow edges to `:end` and collecting output keys. Pass an explicit `:output` schema to override.
 
+## Schema Syntax
+
+Two equivalent ways to write schemas:
+
+```clojure
+;; Lite syntax (simpler, recommended for most cases)
+{:input  {:subtotal :double, :state :string}
+ :output {:tax :double}}
+
+;; Malli vector syntax (full power)
+{:input  [:map [:subtotal :double] [:state :string]]
+ :output [:map [:tax :double]]}
+```
+
+Lite syntax auto-converts `{:key :type}` to `[:map [:key :type]]`. It works in `defcell`, `set-cell-schema!`, and manifest schemas. Nested maps are supported:
+
+```clojure
+{:input {:address {:street :string, :city :string}}}
+;; becomes [:map [:address [:map [:street :string] [:city :string]]]]
+```
+
+Use full Malli syntax when you need: enums (`[:enum :a :b]`), unions (`[:or :string :int]`), optional fields, or other advanced features. Both syntaxes can be mixed freely.
+
 ## Output Schema Formats
 
 ```clojure
@@ -765,7 +795,17 @@ Declare compile-time path invariants that are checked against all enumerated pat
 ;; Useful for scaffolding — fill in handler logic after generating
 ```
 
-`analyze-workflow`, `infer-workflow-schema`, and `generate-stubs` are also available via `myc/`.
+```clojure
+;; Infer schemas from test data (run workflow, observe actual shapes)
+(dev/infer-schemas workflow-def {} [test-input-1 test-input-2])
+;; => {:start {:input [:map [:x :int]], :output [:map [:x :int] [:result :int]]}
+;;     :step2 {:input [:map [:x :int] [:result :int]], :output [:map ...]}}
+
+;; Apply inferred schemas to cell registry
+(dev/apply-inferred-schemas! inferred workflow-def)
+```
+
+`analyze-workflow`, `infer-workflow-schema`, `generate-stubs`, `infer-schemas`, and `apply-inferred-schemas!` are also available via `myc/`.
 
 ## Agent Orchestration
 
@@ -952,7 +992,10 @@ Instead of checking individual keys, use `workflow-error` and `error?`:
 (myc/error? result)           ;; => true/false
 (myc/workflow-error result)   ;; => {:error-type :schema/output, :cell-id :app/step,
                               ;;     :cell-name :step, :failed-keys {:x {...}},
-                              ;;     :message "Schema output validation failed at step (:app/step) — failing keys: (:x)",
+                              ;;     :key-diff {:missing #{:expected-key}, :extra #{:typo-key}},
+                              ;;     :message "Schema output validation failed at step (:app/step)
+                              ;;       Missing key(s): #{:expected-key}
+                              ;;       Extra key(s): #{:typo-key}",
                               ;;     :details {...}} or nil
 ```
 

@@ -4,6 +4,7 @@
             [clojure.string :as str]
             [malli.core :as m]
             [malli.generator :as mg]
+            [malli.provider :as mp]
             [mycelium.cell :as cell]
             [mycelium.schema :as schema]
             [mycelium.workflow :as wf]
@@ -475,3 +476,68 @@
   (let [counter (atom -1)]
     (fn [entry]
       (println (format-trace-entry (swap! counter inc) entry)))))
+
+;; ===== Schema inference from test runs =====
+
+(defn- strip-mycelium-keys
+  "Removes :mycelium/* keys from a data map for schema inference."
+  [data]
+  (into {} (remove (fn [[k _]] (and (keyword? k) (= "mycelium" (namespace k))))) data))
+
+(defn infer-schemas
+  "Infers input/output schemas for each cell by running a workflow with test inputs.
+   Runs the workflow in :validate :off mode, captures cell inputs and outputs
+   via :on-trace, then uses malli.provider/provide to generate schemas.
+
+   Returns a map of {cell-name {:input schema :output schema}}.
+
+   Arguments:
+     workflow-def — workflow definition map
+     resources    — resources map
+     test-inputs  — vector of input data maps to run"
+  [workflow-def resources test-inputs]
+  (let [cell-data (atom {})] ;; {cell-name {:inputs [...] :outputs [...]}}
+    ;; Run workflow for each test input sequentially
+    (doseq [input test-inputs]
+      (let [;; Per-run capture of cell input data (keyed by state-id)
+            input-capture (atom {})
+            pre-hook (fn [fsm-state _resources]
+                       (let [state-id (:current-state-id fsm-state)]
+                         (when-not (contains? #{::fsm/end ::fsm/error ::fsm/halt} state-id)
+                           (swap! input-capture assoc state-id
+                                  (strip-mycelium-keys (:data fsm-state))))
+                         fsm-state))
+            on-trace (fn [{:keys [cell] :as _entry}]
+                       (let [input-data  (get @input-capture
+                                             (wf/resolve-state-id cell))
+                             output-data (strip-mycelium-keys (:data _entry))]
+                         (swap! cell-data update cell
+                                (fn [m]
+                                  (-> (or m {:inputs [] :outputs []})
+                                      (update :inputs conj (or input-data output-data))
+                                      (update :outputs conj output-data))))))
+            compiled (wf/compile-workflow workflow-def
+                                         {:validate :off
+                                          :pre pre-hook
+                                          :on-trace on-trace})]
+        (try
+          @(fsm/run-async compiled resources {:data input})
+          (catch Exception _))))
+    ;; Infer schemas from collected data
+    (into {}
+          (map (fn [[cell-name {:keys [inputs outputs]}]]
+                 [cell-name {:input  (mp/provide inputs)
+                             :output (mp/provide outputs)}]))
+          @cell-data)))
+
+(defn apply-inferred-schemas!
+  "Applies inferred schemas to cells in the registry.
+   `inferred` is the output of `infer-schemas`.
+   `workflow-def` is the workflow definition (needed to map cell-names to cell-ids)."
+  [inferred workflow-def]
+  (let [cells (:cells workflow-def)]
+    (doseq [[cell-name schema-map] inferred]
+      (let [cell-ref (get cells cell-name)
+            cell-id  (if (map? cell-ref) (:id cell-ref) cell-ref)]
+        (when cell-id
+          (cell/set-cell-schema! cell-id schema-map))))))

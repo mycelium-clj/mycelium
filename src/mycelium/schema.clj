@@ -2,7 +2,9 @@
   "Schema validation interceptors for Mycelium.
    Provides pre/post interceptors that enforce Malli schemas on cell input/output,
    and async callback wrappers for async cells."
-  (:require [malli.core :as m]
+  (:require [clojure.set :as set]
+            [clojure.string :as str]
+            [malli.core :as m]
             [malli.error :as me]
             [malli.transform :as mt]
             [maestro.core :as fsm]))
@@ -52,6 +54,38 @@
 (def ^:private terminal-states
   #{::fsm/end ::fsm/error ::fsm/halt})
 
+;; ===== Key-diff diagnostics =====
+
+(defn- schema-expected-keys
+  "Extracts the set of required (non-optional) top-level keys from a :map schema."
+  [schema]
+  (when (and schema (= :map (m/type schema)))
+    (into #{}
+          (keep (fn [child]
+                  (let [k    (first child)
+                        opts (when (= 3 (count child)) (second child))]
+                    (when-not (:optional opts)
+                      k))))
+          (m/children schema))))
+
+(defn- compute-key-diff
+  "Computes the difference between schema-expected keys and actual data keys.
+   Returns {:missing #{keys in schema but not data}
+            :extra   #{keys in data but not schema or mycelium/*}}
+   or nil if the schema is not a :map type or data is not a map."
+  [schema data]
+  (when (and (map? data) schema)
+    (when-let [expected (schema-expected-keys schema)]
+      (let [actual  (into #{}
+                          (remove (fn [k]
+                                    (and (keyword? k)
+                                         (= "mycelium" (namespace k)))))
+                          (keys data))
+            missing (set/difference expected actual)
+            extra   (set/difference actual expected)]
+        {:missing missing
+         :extra   extra}))))
+
 (defn- strip-mycelium-keys
   "Removes :mycelium/* keys from a data map to reduce error payload noise."
   [data]
@@ -72,22 +106,40 @@
                        :message (first msgs)}])))
           humanized)))
 
+(defn- build-suggestion-message
+  "Builds suggestion text from key-diff, showing missing/extra keys and rename hints."
+  [{:keys [missing extra]}]
+  (let [parts (cond-> []
+                (seq missing)
+                (conj (str "Missing key(s): " (pr-str missing)))
+                (seq extra)
+                (conj (str "Extra key(s): " (pr-str extra))))]
+    (when (seq parts)
+      (str/join "\n  " parts))))
+
 (defn- build-error-map
   "Builds a schema error map with enriched diagnostics.
-   Includes a human-readable :message with cell-id, phase, and failing key names."
+   Includes a human-readable :message with cell-id, phase, failing key names,
+   and key-diff suggestions showing missing/extra keys."
   [cell-id phase explanation data]
   (let [humanized   (me/humanize explanation)
         failed-keys (when (map? humanized) (build-failed-keys humanized data))
         key-names   (when failed-keys (keys failed-keys))
+        schema      (:schema explanation)
+        key-diff    (when (map? data) (compute-key-diff schema data))
+        suggestion  (when key-diff (build-suggestion-message key-diff))
         message     (str "Schema " (name phase) " validation failed at " cell-id
                          (when (seq key-names)
-                           (str " — failing keys: " (pr-str key-names))))]
+                           (str " — failing keys: " (pr-str key-names)))
+                         (when suggestion
+                           (str "\n  " suggestion)))]
     (cond-> {:cell-id     cell-id
              :phase       phase
              :message     message
              :errors      humanized
              :data        (strip-mycelium-keys data)}
-      failed-keys (assoc :failed-keys failed-keys))))
+      failed-keys (assoc :failed-keys failed-keys)
+      key-diff    (assoc :key-diff key-diff))))
 
 (defn validate-input
   "Validates data against the cell's input schema.
@@ -269,15 +321,18 @@
      `:coerce?`          — when true, coerces data before validation.
      `:state->names`     — map of state-id → cell-name keyword for error messages.
      `:input-transforms` — map of state-id → (fn [data] -> data), applied before validation.
+     `:validate`         — :strict (default), :warn, or :off.
    Skips terminal states."
   ([state->cell] (make-pre-interceptor state->cell {}))
   ([state->cell opts]
    (let [coerce?          (:coerce? opts)
          state->names     (:state->names opts)
-         input-transforms (:input-transforms opts)]
+         input-transforms (:input-transforms opts)
+         validate-mode    (or (:validate opts) :strict)]
      (fn [fsm-state _resources]
        (let [state-id (:current-state-id fsm-state)]
-         (if (contains? terminal-states state-id)
+         (if (or (contains? terminal-states state-id)
+                 (= :off validate-mode))
            fsm-state
            (if-let [cell (get state->cell state-id)]
              (let [;; Apply input transform before validation
@@ -287,20 +342,30 @@
                (if coerce?
                  (let [result (coerce-input cell (:data fsm-state))]
                    (if (:error result)
+                     (if (= :warn validate-mode)
+                       (let [warning (-> (:error result)
+                                         (attach-cell-path (:data fsm-state))
+                                         (attach-cell-name state-id state->names))]
+                         (update-in fsm-state [:data :mycelium/warnings] (fnil conj []) warning))
+                       (-> fsm-state
+                           (assoc :current-state-id ::fsm/error)
+                           (assoc-in [:data :mycelium/schema-error]
+                                     (-> (:error result)
+                                         (attach-cell-path (:data fsm-state))
+                                         (attach-cell-name state-id state->names)))))
+                     (assoc fsm-state :data (:data result))))
+                 (if-let [error (validate-input cell (:data fsm-state))]
+                   (if (= :warn validate-mode)
+                     (let [warning (-> error
+                                       (attach-cell-path (:data fsm-state))
+                                       (attach-cell-name state-id state->names))]
+                       (update-in fsm-state [:data :mycelium/warnings] (fnil conj []) warning))
                      (-> fsm-state
                          (assoc :current-state-id ::fsm/error)
                          (assoc-in [:data :mycelium/schema-error]
-                                   (-> (:error result)
+                                   (-> error
                                        (attach-cell-path (:data fsm-state))
-                                       (attach-cell-name state-id state->names))))
-                     (assoc fsm-state :data (:data result))))
-                 (if-let [error (validate-input cell (:data fsm-state))]
-                   (-> fsm-state
-                       (assoc :current-state-id ::fsm/error)
-                       (assoc-in [:data :mycelium/schema-error]
-                                 (-> error
-                                     (attach-cell-path (:data fsm-state))
-                                     (attach-cell-name state-id state->names))))
+                                       (attach-cell-name state-id state->names)))))
                    fsm-state)))
              fsm-state)))))))
 
@@ -315,13 +380,15 @@
    `opts` — optional map:
      `:coerce?`  — when true, coerces output data before validation.
      `:on-trace` — callback `(fn [trace-entry])` called after each cell completes.
+     `:validate` — :strict (default), :warn, or :off.
    Skips terminal states."
   ([state->cell state->edge-targets state->names]
    (make-post-interceptor state->cell state->edge-targets state->names {}))
   ([state->cell state->edge-targets state->names opts]
    (let [coerce?           (:coerce? opts)
          on-trace          (:on-trace opts)
-         output-transforms (:output-transforms opts)]
+         output-transforms (:output-transforms opts)
+         validate-mode     (or (:validate opts) :strict)]
      (fn [fsm-state _resources]
        (let [state-id (:last-state-id fsm-state)]
          (if (or (nil? state-id)
@@ -332,7 +399,8 @@
                                 (get-in state->edge-targets
                                         [state-id (:current-state-id fsm-state)]))
                    data       (:data fsm-state)
-                   skip-validation? (or (:mycelium/resilience-error data)
+                   skip-validation? (or (= :off validate-mode)
+                                        (:mycelium/resilience-error data)
                                         (:mycelium/timeout data)
                                         (:mycelium/error data))
                    ;; When coercing, get both error and coerced data
@@ -373,6 +441,16 @@
                                  error         (assoc :error error))]
                (when on-trace (on-trace trace-entry))
                (cond
+                 (and error (= :warn validate-mode))
+                 (let [warning (-> error
+                                   (attach-cell-path (:data fsm-state))
+                                   (attach-cell-name state-id state->names))]
+                   (-> fsm-state
+                       (assoc :data data)
+                       (update-in [:data :mycelium/trace] (fnil conj []) trace-entry)
+                       (update :data dissoc :mycelium/join-traces :mycelium/params)
+                       (update-in [:data :mycelium/warnings] (fnil conj []) warning)))
+
                  error
                  (-> fsm-state
                      (update-in [:data :mycelium/trace] (fnil conj []) trace-entry)

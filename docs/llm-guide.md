@@ -12,16 +12,16 @@ A Mycelium workflow is a directed graph of **cells** (pure data transformations)
 (require '[mycelium.cell :as cell]
          '[mycelium.core :as myc])
 
-;; 1. Define cells
+;; 1. Define cells (lite schema syntax — {key type})
 (cell/defcell :app/validate
-  {:input  [:map [:name :string]]
-   :output [:map [:valid :boolean]]}
+  {:input  {:name :string}
+   :output {:valid :boolean}}
   (fn [_resources data]
     {:valid (not (empty? (:name data)))}))
 
 (cell/defcell :app/greet
-  {:input  [:map [:name :string]]
-   :output [:map [:greeting :string]]}
+  {:input  {:name :string}
+   :output {:greeting :string}}
   (fn [_resources data]
     {:greeting (str "Hello, " (:name data) "!")}))
 
@@ -49,17 +49,17 @@ Use `cell/defcell` to register cells. The ID is specified once (no duplication).
   (fn [resources data]
     {:result-key "value"}))
 
-;; With schema (recommended)
+;; With schema (recommended — lite syntax)
 (cell/defcell :ns/cell-id
-  {:input  [:map [:x :int]]
-   :output [:map [:y :int]]}
+  {:input  {:x :int}
+   :output {:y :int}}
   (fn [resources data]
     {:y (* 2 (:x data))}))
 
 ;; With schema + options
 (cell/defcell :ns/cell-id
-  {:input    [:map [:x :int]]
-   :output   [:map [:y :int]]
+  {:input    {:x :int}
+   :output   {:y :int}
    :doc      "Doubles the input"
    :requires [:db]}
   (fn [{:keys [db]} data]
@@ -72,7 +72,32 @@ Use `cell/defcell` to register cells. The ID is specified once (no duplication).
 2. **Return only new keys.** Key propagation is on by default — input keys are merged automatically. Don't `(assoc data ...)`, just return `{:new-key value}`.
 3. **Resources for infrastructure.** Database connections, HTTP clients, config go in `resources`. Data map is for workflow state only.
 4. **Errors are data.** Set a key (`:status :failed`) and let dispatch predicates route it. Don't throw for expected failures.
-5. **Schemas use [Malli](https://github.com/metosin/malli) syntax.** `[:map [:key :type]]` for maps. Types: `:string`, `:int`, `:double`, `:boolean`, `:keyword`, `:uuid`, `[:enum :a :b]`, `[:vector :type]`, etc.
+5. **Schemas use [Malli](https://github.com/metosin/malli) syntax** or **lite syntax** (see below).
+
+### Schema Syntax
+
+Two equivalent ways to write schemas:
+
+```clojure
+;; Malli vector syntax (full power)
+{:input  [:map [:subtotal :double] [:state :string]]
+ :output [:map [:tax :double]]}
+
+;; Lite syntax (simpler, recommended for most cases)
+{:input  {:subtotal :double, :state :string}
+ :output {:tax :double}}
+```
+
+Lite syntax auto-converts `{:key :type}` to `[:map [:key :type]]`. It works in `defcell`, `set-cell-schema!`, and manifest schemas. Nested maps are supported:
+
+```clojure
+{:input {:address {:street :string, :city :string}}}
+;; becomes [:map [:address [:map [:street :string] [:city :string]]]]
+```
+
+Use full Malli syntax when you need: enums (`[:enum :a :b]`), unions (`[:or :string :int]`), optional fields, or other advanced features. Both syntaxes can be mixed freely.
+
+Available types: `:string`, `:int`, `:double`, `:boolean`, `:keyword`, `:uuid`, `[:enum :a :b]`, `[:vector :type]`, `[:map-of :key-type :val-type]`, etc.
 
 ---
 
@@ -140,48 +165,81 @@ Join members have **no entries in `:edges`**. Each gets the same input snapshot.
 
 ---
 
-## Development Workflow
+## Development Workflow (3 Phases)
 
-### 1. Write the Manifest First
+Mycelium supports an iterative development workflow. You don't need to get everything right on the first try.
 
-Define cells, edges, schemas. Compilation validates everything:
+### Phase 1: Structure (compile-time feedback)
+
+Write the manifest with cells, edges, and schemas. Pre-compilation catches structural errors immediately:
 
 ```clojure
-(myc/pre-compile workflow-def) ;; Throws on invalid structure
+(myc/pre-compile workflow-def) ;; Throws on: missing edges, unreachable cells, bad schemas
 ```
 
-### 2. Generate Stubs
+Generate cell stubs from the workflow structure:
 
 ```clojure
 (println (myc/generate-stubs workflow-def))
 ;; Prints defcell forms with schemas and TODO handlers
 ```
 
-Copy the output, fill in handler logic. Schemas and wiring are pre-validated.
+### Phase 2: Logic (run with warnings, iterate)
 
-### 3. Test Cells in Isolation
+Write handler implementations. Run with `:validate :warn` to see all problems at once without halting:
+
+```clojure
+(let [result (myc/run-workflow workflow {} test-data {:validate :warn})]
+  ;; Workflow runs to completion even if schemas don't match
+  (println (:mycelium/warnings result)))
+;; => [{:cell-id :app/tax, :phase :output,
+;;      :message "Schema output validation failed at :app/tax
+;;        Missing key(s): #{:tax}
+;;        Extra key(s): #{:tax-amount}",
+;;      :key-diff {:missing #{:tax}, :extra #{:tax-amount}}}]
+```
+
+Schema errors now include **key-diff suggestions** — if you misname a key, the error tells you exactly what to rename.
+
+You can also skip validation entirely during early development:
+
+```clojure
+(myc/run-workflow workflow {} test-data {:validate :off})
+```
+
+**Or infer schemas from test runs** — write handlers first, let Mycelium figure out the schemas:
 
 ```clojure
 (require '[mycelium.dev :as dev])
 
+;; Run with test data, observe actual shapes
+(def inferred (dev/infer-schemas workflow-def {} test-inputs))
+;; => {:start {:input [:map [:x :int]], :output [:map [:x :int] [:result :int]]}
+;;     :fmt   {:input [:map [:x :int] [:result :int]], :output [:map ...]}}
+
+;; Apply inferred schemas to cell registry
+(dev/apply-inferred-schemas! inferred workflow-def)
+```
+
+### Phase 3: Contract (strict mode)
+
+Once logic is correct, lock down schemas. Run with `:validate :strict` (the default):
+
+```clojure
+(let [result (myc/run-workflow workflow {} data)]
+  ;; Schema violations halt execution with precise error
+  (when-let [err (myc/workflow-error result)]
+    (println (:message err))     ;; human-readable with key-diff suggestions
+    (println (:key-diff err))    ;; {:missing #{...} :extra #{...}}
+    (println (:failed-keys err)) ;; per-key details with types
+    ))
+```
+
+### Testing Cells in Isolation
+
+```clojure
 (dev/test-cell :app/validate {:input {:name "Alice"}})
 ;; => {:pass? true, :output {:valid true}, :errors [], :duration-ms 0.1}
-```
-
-### 4. Test the Workflow
-
-```clojure
-(let [result (myc/run-workflow workflow {} {:name "Alice"})]
-  (is (nil? (myc/workflow-error result)))
-  (is (= "Hello, Alice!" (:greeting result))))
-```
-
-### 5. Check Errors
-
-```clojure
-(when-let [err (myc/workflow-error result)]
-  ;; err has :error-type, :cell-name, :cell-id, :message, :failed-keys
-  (println (:message err)))
 ```
 
 ---
@@ -214,14 +272,19 @@ Cell handlers must return a map! Returning `nil` causes downstream failures. If 
 
 | Concept | Syntax |
 |---------|--------|
-| Register cell | `(cell/defcell :ns/id schema-map handler-fn)` |
+| Register cell | `(cell/defcell :ns/id {:input {:x :int} :output {:y :int}} handler-fn)` |
+| Lite schema | `{:input {:x :int}}` → `{:input [:map [:x :int]]}` |
 | Linear pipeline | `{:pipeline [:a :b :c]}` |
 | Branching edges | `{:edges {:start {:label :target}}}` |
 | Dispatch | `{:dispatches {:start [[:label (fn [d] pred)]]}}` |
 | Parallel join | `{:joins {:name {:cells [:a :b] :strategy :parallel}}}` |
 | Run workflow | `(myc/run-workflow wf resources data)` |
+| Run with warnings | `(myc/run-workflow wf res data {:validate :warn})` |
+| Run without validation | `(myc/run-workflow wf res data {:validate :off})` |
 | Pre-compile | `(def c (myc/pre-compile wf))` then `(myc/run-compiled c res data)` |
-| Check error | `(myc/workflow-error result)` |
+| Check error | `(myc/workflow-error result)` — includes `:key-diff` suggestions |
+| Infer schemas | `(dev/infer-schemas wf res [test-data ...])` |
+| Apply inferred | `(dev/apply-inferred-schemas! inferred wf)` |
 | Test cell | `(dev/test-cell :ns/id {:input {...}})` |
 | Generate stubs | `(println (myc/generate-stubs wf))` |
 | Coerce types | `(myc/pre-compile wf {:coerce? true})` |

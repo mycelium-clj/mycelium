@@ -232,6 +232,16 @@
    See mycelium.dev/generate-stubs."
   dev/generate-stubs)
 
+(def infer-schemas
+  "Infers input/output schemas by running workflow with test inputs.
+   See mycelium.dev/infer-schemas."
+  dev/infer-schemas)
+
+(def apply-inferred-schemas!
+  "Applies inferred schemas to cells in the registry.
+   See mycelium.dev/apply-inferred-schemas!."
+  dev/apply-inferred-schemas!)
+
 ;; --- Error inspection ---
 
 (defn workflow-error
@@ -257,6 +267,7 @@
           cell-id   (:cell-id err)
           fk        (:failed-keys err)
           key-names (when fk (keys fk))
+          key-diff  (:key-diff err)
           cell-label (if cell-name
                        (str cell-name " (" cell-id ")")
                        (str cell-id))]
@@ -264,12 +275,10 @@
                :cell-id     cell-id
                :cell-path   (:cell-path err)
                :failed-keys fk
-               :message     (str "Schema " (name (:phase err)) " validation failed at "
-                                 cell-label
-                                 (when (seq key-names)
-                                   (str " — failing keys: " (pr-str key-names))))
+               :message     (:message err)
                :details     err}
-        cell-name (assoc :cell-name cell-name)))
+        cell-name (assoc :cell-name cell-name)
+        key-diff  (assoc :key-diff key-diff)))
 
     ;; Handler exception (error groups)
     (:mycelium/error result)

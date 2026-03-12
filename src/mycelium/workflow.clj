@@ -1053,10 +1053,17 @@
 
     :else false))
 
+(def ^:private preserved-mycelium-keys
+  "Mycelium keys that survive key propagation (stripped from input, re-attached after merge)."
+  #{:mycelium/warnings})
+
 (defn- strip-mycelium-keys
-  "Removes :mycelium/* keys from a data map for key propagation."
+  "Removes :mycelium/* keys from a data map for key propagation.
+   Preserves keys listed in `preserved-mycelium-keys`."
   [data]
-  (into {} (remove (fn [[k _]] (and (keyword? k) (= "mycelium" (namespace k))))) data))
+  (into {} (remove (fn [[k _]] (and (keyword? k)
+                                     (= "mycelium" (namespace k))
+                                     (not (contains? preserved-mycelium-keys k))))) data))
 
 (defn- wrap-handler-with-propagation
   "Wraps a cell handler so that input keys automatically propagate to output.
@@ -1282,7 +1289,7 @@
          transform-maps (when-let [transforms (:transforms workflow)]
                           (build-transform-maps transforms edges))
          ;; Build interceptors — compose custom pre/post with schema interceptors
-         schema-opts (-> (select-keys opts [:coerce? :on-trace])
+         schema-opts (-> (select-keys opts [:coerce? :on-trace :validate])
                         (assoc :state->names state->names)
                         (cond->
                           transform-maps (assoc :input-transforms  (:input transform-maps)
