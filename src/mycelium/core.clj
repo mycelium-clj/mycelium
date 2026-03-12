@@ -257,6 +257,7 @@
           cell-id   (:cell-id err)
           fk        (:failed-keys err)
           key-names (when fk (keys fk))
+          key-diff  (:key-diff err)
           cell-label (if cell-name
                        (str cell-name " (" cell-id ")")
                        (str cell-id))]
@@ -264,12 +265,10 @@
                :cell-id     cell-id
                :cell-path   (:cell-path err)
                :failed-keys fk
-               :message     (str "Schema " (name (:phase err)) " validation failed at "
-                                 cell-label
-                                 (when (seq key-names)
-                                   (str " — failing keys: " (pr-str key-names))))
+               :message     (:message err)
                :details     err}
-        cell-name (assoc :cell-name cell-name)))
+        cell-name (assoc :cell-name cell-name)
+        key-diff  (assoc :key-diff key-diff)))
 
     ;; Handler exception (error groups)
     (:mycelium/error result)

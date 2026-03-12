@@ -2,7 +2,9 @@
   "Schema validation interceptors for Mycelium.
    Provides pre/post interceptors that enforce Malli schemas on cell input/output,
    and async callback wrappers for async cells."
-  (:require [malli.core :as m]
+  (:require [clojure.set :as set]
+            [clojure.string :as str]
+            [malli.core :as m]
             [malli.error :as me]
             [malli.transform :as mt]
             [maestro.core :as fsm]))
@@ -52,6 +54,38 @@
 (def ^:private terminal-states
   #{::fsm/end ::fsm/error ::fsm/halt})
 
+;; ===== Key-diff diagnostics =====
+
+(defn- schema-expected-keys
+  "Extracts the set of required (non-optional) top-level keys from a :map schema."
+  [schema]
+  (when (and schema (= :map (m/type schema)))
+    (into #{}
+          (keep (fn [child]
+                  (let [k    (first child)
+                        opts (when (= 3 (count child)) (second child))]
+                    (when-not (:optional opts)
+                      k))))
+          (m/children schema))))
+
+(defn- compute-key-diff
+  "Computes the difference between schema-expected keys and actual data keys.
+   Returns {:missing #{keys in schema but not data}
+            :extra   #{keys in data but not schema or mycelium/*}}
+   or nil if the schema is not a :map type or data is not a map."
+  [schema data]
+  (when (and (map? data) schema)
+    (when-let [expected (schema-expected-keys schema)]
+      (let [actual  (into #{}
+                          (remove (fn [k]
+                                    (and (keyword? k)
+                                         (= "mycelium" (namespace k)))))
+                          (keys data))
+            missing (set/difference expected actual)
+            extra   (set/difference actual expected)]
+        {:missing missing
+         :extra   extra}))))
+
 (defn- strip-mycelium-keys
   "Removes :mycelium/* keys from a data map to reduce error payload noise."
   [data]
@@ -72,22 +106,40 @@
                        :message (first msgs)}])))
           humanized)))
 
+(defn- build-suggestion-message
+  "Builds suggestion text from key-diff, showing missing/extra keys and rename hints."
+  [{:keys [missing extra]}]
+  (let [parts (cond-> []
+                (seq missing)
+                (conj (str "Missing key(s): " (pr-str missing)))
+                (seq extra)
+                (conj (str "Extra key(s): " (pr-str extra))))]
+    (when (seq parts)
+      (str/join "\n  " parts))))
+
 (defn- build-error-map
   "Builds a schema error map with enriched diagnostics.
-   Includes a human-readable :message with cell-id, phase, and failing key names."
+   Includes a human-readable :message with cell-id, phase, failing key names,
+   and key-diff suggestions showing missing/extra keys."
   [cell-id phase explanation data]
   (let [humanized   (me/humanize explanation)
         failed-keys (when (map? humanized) (build-failed-keys humanized data))
         key-names   (when failed-keys (keys failed-keys))
+        schema      (:schema explanation)
+        key-diff    (when (map? data) (compute-key-diff schema data))
+        suggestion  (when key-diff (build-suggestion-message key-diff))
         message     (str "Schema " (name phase) " validation failed at " cell-id
                          (when (seq key-names)
-                           (str " — failing keys: " (pr-str key-names))))]
+                           (str " — failing keys: " (pr-str key-names)))
+                         (when suggestion
+                           (str "\n  " suggestion)))]
     (cond-> {:cell-id     cell-id
              :phase       phase
              :message     message
              :errors      humanized
              :data        (strip-mycelium-keys data)}
-      failed-keys (assoc :failed-keys failed-keys))))
+      failed-keys (assoc :failed-keys failed-keys)
+      key-diff    (assoc :key-diff key-diff))))
 
 (defn validate-input
   "Validates data against the cell's input schema.
