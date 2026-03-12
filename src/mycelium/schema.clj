@@ -7,6 +7,48 @@
             [malli.transform :as mt]
             [maestro.core :as fsm]))
 
+;; ===== Lite schema normalization =====
+
+(defn normalize-schema
+  "Normalizes a schema that may be in lite syntax to standard Malli.
+   - Plain maps become [:map [:k1 v1] [:k2 v2] ...] with values recursively normalized
+   - Vectors, keywords, and nil pass through unchanged
+   Examples:
+     {:subtotal :double}             → [:map [:subtotal :double]]
+     {:address {:street :string}}    → [:map [:address [:map [:street :string]]]]
+     [:map [:x :int]]                → [:map [:x :int]]
+     :int                            → :int"
+  [schema]
+  (cond
+    (nil? schema) nil
+    (map? schema) (into [:map] (map (fn [[k v]] [k (normalize-schema v)])) schema)
+    :else schema))
+
+(defn normalize-output-schema
+  "Normalizes an output schema, accounting for per-transition maps.
+   When `dispatched?` is true and the schema is a map, each value is normalized
+   individually (per-transition output). Otherwise the map is treated as lite syntax."
+  [schema dispatched?]
+  (cond
+    (nil? schema)    nil
+    (vector? schema) schema
+    (map? schema)    (if dispatched?
+                       (into {} (map (fn [[k v]] [k (normalize-schema v)])) schema)
+                       (normalize-schema schema))
+    :else            schema))
+
+(defn normalize-cell-schema
+  "Normalizes a cell's :schema map, converting lite syntax to Malli.
+   `dispatched?` — true if the cell has branching edges (per-transition output)."
+  ([schema] (normalize-cell-schema schema false))
+  ([schema dispatched?]
+   (when schema
+     (let [input  (:input schema)
+           output (:output schema)]
+       (cond-> schema
+         input  (assoc :input (normalize-schema input))
+         output (assoc :output (normalize-output-schema output dispatched?)))))))
+
 (def ^:private terminal-states
   #{::fsm/end ::fsm/error ::fsm/halt})
 
