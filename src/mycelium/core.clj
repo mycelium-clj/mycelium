@@ -232,6 +232,16 @@
    See mycelium.dev/generate-stubs."
   dev/generate-stubs)
 
+(def infer-schemas
+  "Infers input/output schemas by running workflow with test inputs.
+   See mycelium.dev/infer-schemas."
+  dev/infer-schemas)
+
+(def apply-inferred-schemas!
+  "Applies inferred schemas to cells in the registry.
+   See mycelium.dev/apply-inferred-schemas!."
+  dev/apply-inferred-schemas!)
+
 ;; --- Error inspection ---
 
 (defn workflow-error
