@@ -360,6 +360,44 @@ Verify that errors are caught and routed correctly:
 
 ## 7. Iterate and Refine
 
+### Validate Modes
+
+During development, use `:validate :warn` to see all schema problems without halting execution:
+
+```clojure
+(let [result (myc/run-workflow wf resources test-data {:validate :warn})]
+  ;; Workflow runs to completion even if schemas don't match
+  (println (:mycelium/warnings result)))
+;; => [{:cell-id :app/tax, :phase :output,
+;;      :message "Schema output validation failed at :app/tax
+;;        Missing key(s): #{:tax}
+;;        Extra key(s): #{:tax-amount}",
+;;      :key-diff {:missing #{:tax}, :extra #{:tax-amount}}}]
+```
+
+Or skip validation entirely during early prototyping:
+
+```clojure
+(myc/run-workflow wf resources test-data {:validate :off})
+```
+
+Switch to `:validate :strict` (the default) once logic is correct to enforce contracts.
+
+### Infer Schemas from Test Runs
+
+Write handlers first, let Mycelium figure out the schemas:
+
+```clojure
+(require '[mycelium.dev :as dev])
+
+(def inferred (dev/infer-schemas workflow-def {} [test-input-1 test-input-2]))
+;; => {:start {:input [:map [:x :int]], :output [:map [:x :int] [:result :int]]}
+;;     :step2 {:input [:map [:x :int] [:result :int]], :output [:map ...]}}
+
+;; Apply inferred schemas to cell registry
+(dev/apply-inferred-schemas! inferred workflow-def)
+```
+
 ### Use Dev Tools
 
 ```clojure

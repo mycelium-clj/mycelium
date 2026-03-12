@@ -61,17 +61,33 @@ Schema errors are the most detailed. When a cell's input or output fails Malli v
 {:cell-id     :app/process-payment
  :cell-name   :payment
  :phase       :input           ;; or :output
- :message     "Schema input validation failed at payment (:app/process-payment) — failing keys: (:amount :currency)"
+ :message     "Schema input validation failed at payment (:app/process-payment)
+   Missing key(s): #{:currency}
+   Extra key(s): #{:curr}"
  :failed-keys {:amount   {:value "not-a-number"
                            :type  "java.lang.String"
                            :message "should be a double"}
                 :currency {:value nil
                            :type  nil
                            :message "missing required key"}}
+ :key-diff    {:missing #{:currency}   ;; expected by schema but not in data
+               :extra   #{:curr}}      ;; in data but not in schema (possible typo)
  :cell-path   [:validate :lookup]   ;; cells that ran before this one
  :errors      {:amount ["should be a double"]
                :currency ["missing required key"]}
  :data        {:user-id "alice"}}   ;; clean data (no :mycelium/* keys)
+```
+
+### Key-Diff Suggestions
+
+The `:key-diff` field helps identify typos and misnamed keys. When a schema expects `:currency` but the data contains `:curr`, the diff makes the fix obvious:
+
+```clojure
+(when-let [{:keys [key-diff]} (myc/workflow-error result)]
+  (when (seq (:missing key-diff))
+    (println "Missing keys:" (:missing key-diff)))
+  (when (seq (:extra key-diff))
+    (println "Extra keys (possible typos):" (:extra key-diff))))
 ```
 
 ### Diagnosing Schema Failures
@@ -111,6 +127,30 @@ Validate initial workflow data before any cells run:
 ```
 
 No cells execute when input validation fails.
+
+## Validation Modes
+
+Control how schema errors are handled with the `:validate` option:
+
+```clojure
+;; :strict (default) — halt on first schema error
+(myc/run-workflow wf resources data)
+(myc/run-workflow wf resources data {:validate :strict})
+
+;; :warn — log warnings, continue execution
+(let [result (myc/run-workflow wf resources data {:validate :warn})]
+  (println (:mycelium/warnings result)))
+;; => [{:cell-id :app/tax, :phase :output,
+;;      :message "Schema output validation failed at :app/tax
+;;        Missing key(s): #{:tax}
+;;        Extra key(s): #{:tax-amount}",
+;;      :key-diff {:missing #{:tax}, :extra #{:tax-amount}}}]
+
+;; :off — skip all schema validation
+(myc/run-workflow wf resources data {:validate :off})
+```
+
+Use `:warn` during iterative development to see all problems at once. Use `:off` for early prototyping when schemas aren't ready. Switch to `:strict` for production.
 
 ## Error Groups
 
