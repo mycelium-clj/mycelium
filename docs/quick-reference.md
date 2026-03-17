@@ -182,45 +182,48 @@ Key propagation is on by default — cells can return only new/changed keys and 
 ```clojure
 (require '[mycelium.cell :as cell])
 
-;; Minimal — no schema
+;; Minimal — no schema, :doc is required
 (cell/defcell :namespace/cell-id
+  {:doc "Describe what this cell does and how it should be used"}
   (fn [resources data] {:result "value"}))
 
 ;; With schema (lite syntax — recommended)
 (cell/defcell :namespace/cell-id
-  {:input  {:key :type}
+  {:doc    "Transforms input key into a result string"
+   :input  {:key :type}
    :output {:result :string}}
   (fn [resources data] {:result "value"}))
 
 ;; With schema (full Malli vector syntax)
 (cell/defcell :namespace/cell-id
-  {:input  [:map [:key :type]]
+  {:doc    "Transforms input key into a result string"
+   :input  [:map [:key :type]]
    :output [:map [:result :string]]}
   (fn [resources data] {:result "value"}))
 
 ;; With schema + options
 (cell/defcell :namespace/cell-id
-  {:input    {:key :type}
+  {:doc      "Describe what this cell does and how it should be used"
+   :input    {:key :type}
    :output   {:result :string}
-   :doc      "..."
    :requires [:db]
    :async?   true}
   (fn [resources data callback error-callback] ...))
 ```
 
-`defcell` eliminates ID duplication — the cell-id is specified once. Schema, `:doc`, `:requires`, and `:async?` are passed in the opts map. The handler function is always the last argument.
+`defcell` eliminates ID duplication — the cell-id is specified once. The opts map **must** contain a `:doc` string describing the cell's purpose and semantics for LLM consumption. Schema, `:requires`, and `:async?` are also passed in the opts map. The handler function is always the last argument.
 
 ### defmethod (low-level)
 
 ```clojure
 (defmethod cell/cell-spec :namespace/cell-id [_]
   {:id       :namespace/cell-id
+   :doc      "Describe what this cell does and how it should be used"
    :handler  (fn [resources data] {:result "value"})
    :schema   {:input  [:map [:key :type]]
               :output [:map [:result :string]]}
    :requires [:db]
-   :async?   true
-   :doc      "..."})
+   :async?   true})
 ```
 
 ### Cell Registry Helpers
@@ -569,9 +572,9 @@ Stateful policies (circuit breaker, rate limiter) require `pre-compile` + `run-c
 
 ```clojure
 {:id       :namespace/name    ;; cell registry ID
+ :doc      "..."              ;; required — describes purpose and semantics for LLMs
  :schema   {:input  [...]     ;; Malli schema
             :output [...]}    ;; single or per-transition
- :doc      "..."              ;; optional description
  :requires [:db]              ;; optional resource dependencies
  :on-error :cell-name}        ;; or nil — required in strict mode (default)
 ```

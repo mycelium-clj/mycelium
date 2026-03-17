@@ -39,13 +39,17 @@
 
 (defn validate-cell-def!
   "Validates a single cell definition (manifest or fragment).
-   Checks :id and :schema presence, validates Malli schemas.
+   Checks :id, :doc, and :schema presence, validates Malli schemas.
    Expects schemas to be pre-normalized (lite syntax already converted).
    Skips schema validation for :schema :inherit (resolved separately).
    `context` is a string prefix for error messages (e.g. \"Cell\" or \"Fragment cell\")."
   [cell-name cell-def context]
   (when-not (:id cell-def)
     (throw (ex-info (str context " " cell-name " missing :id") {:cell-name cell-name})))
+  (when-not (and (string? (:doc cell-def)) (seq (:doc cell-def)))
+    (throw (ex-info (str context " " cell-name " missing :doc — provide a non-empty string "
+                         "describing the cell's purpose and semantics")
+                    {:cell-name cell-name})))
   (when-not (:schema cell-def)
     (throw (ex-info (str context " " cell-name " missing :schema") {:cell-name cell-name})))
   (when-not (= :inherit (:schema cell-def))

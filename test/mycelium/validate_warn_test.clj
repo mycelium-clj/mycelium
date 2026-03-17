@@ -12,7 +12,8 @@
 (deftest validate-strict-test
   (testing ":validate :strict halts on schema mismatch (default behavior)"
     (cell/defcell :test/bad-output
-      {:input  {:x :int}
+      {:doc    "Returns y from x but intentionally wrong"
+       :input  {:x :int}
        :output {:y :int}}
       ;; Returns wrong key
       (fn [_ data] {:z 42}))
@@ -28,7 +29,8 @@
 (deftest validate-warn-continues-test
   (testing ":validate :warn continues execution on schema mismatch"
     (cell/defcell :test/warn-output
-      {:input  {:x :int}
+      {:doc    "Doubles x into y"
+       :input  {:x :int}
        :output {:y :int}}
       ;; Returns wrong key name
       (fn [_ data] {:z (* 2 (:x data))}))
@@ -48,12 +50,14 @@
 (deftest validate-warn-accumulates-test
   (testing "Warnings accumulate across multiple cells"
     (cell/defcell :test/step-a
-      {:input  {:x :int}
+      {:doc    "Produces a-result from x"
+       :input  {:x :int}
        :output {:a-result :int}}
       ;; Wrong key
       (fn [_ data] {:a-wrong 1}))
     (cell/defcell :test/step-b
-      {:input  {:x :int}
+      {:doc    "Produces b-result from x"
+       :input  {:x :int}
        :output {:b-result :int}}
       ;; Also wrong key
       (fn [_ data] {:b-wrong 2}))
@@ -72,7 +76,8 @@
 (deftest validate-warn-diagnostic-info-test
   (testing "Warning contains cell-id, phase, and key-diff info"
     (cell/defcell :test/diag
-      {:input  {:x :int}
+      {:doc    "Doubles x into result"
+       :input  {:x :int}
        :output {:result :int}}
       (fn [_ data] {:rezult (* 2 (:x data))}))
     (let [result (myc/run-workflow
@@ -91,7 +96,8 @@
 (deftest validate-off-test
   (testing ":validate :off skips all schema validation"
     (cell/defcell :test/off
-      {:input  {:x :int}
+      {:doc    "Produces y from x"
+       :input  {:x :int}
        :output {:y :int}}
       ;; Completely wrong types and keys
       (fn [_ data] {:z "not-an-int"}))
@@ -109,7 +115,8 @@
 (deftest run-compiled-validate-option-test
   (testing "run-compiled passes :validate to compilation"
     (cell/defcell :test/compiled-warn
-      {:input  {:x :int}
+      {:doc    "Produces y from x"
+       :input  {:x :int}
        :output {:y :int}}
       (fn [_ data] {:z 42}))
     (let [compiled (myc/pre-compile
@@ -125,7 +132,8 @@
 (deftest validate-warn-input-test
   (testing ":validate :warn collects input schema warnings too"
     (cell/defcell :test/input-warn
-      {:input  {:x :int}
+      {:doc    "Produces y from integer x"
+       :input  {:x :int}
        :output {:y :int}}
       (fn [_ data] {:y 42}))
     (let [result (myc/run-workflow
@@ -142,7 +150,8 @@
 (deftest validate-default-strict-test
   (testing "Default behavior (no :validate opt) is strict"
     (cell/defcell :test/default-strict
-      {:input  {:x :int}
+      {:doc    "Produces y from x"
+       :input  {:x :int}
        :output {:y :int}}
       (fn [_ data] {:z 42}))
     (let [result (myc/run-workflow

@@ -115,6 +115,7 @@
   (testing "Manifest :input-schema passes through manifest->workflow"
     (let [m {:id :test/input-schema-wf
              :cells {:start {:id :input-schema/m-cell
+                              :doc "Manifest input schema test cell"
                               :schema {:input [:map [:x :int]]
                                        :output [:map [:y :int]]}
                               :on-error nil}}
@@ -132,6 +133,7 @@
           (manifest/validate-manifest
            {:id :test/bad-input-schema
             :cells {:start {:id :test/cell
+                             :doc "Cell for input schema validation test"
                              :schema {:input [:map] :output [:map]}
                              :on-error nil}}
             :edges {:start :end}

@@ -92,48 +92,50 @@
   "Registers a cell with less boilerplate than the raw defmethod.
    Eliminates ID duplication — the cell-id is specified once.
 
-   Arities:
-     (defcell :ns/id handler-fn)
-     (defcell :ns/id schema-map handler-fn)
+   Arity:
+     (defcell :ns/id opts handler-fn)
 
-   schema-map is {:input [...] :output [...]} with optional :doc, :requires, :async?.
+   opts is a map that MUST contain :doc (a non-empty string describing the cell's
+   purpose and semantics for LLM consumption). It may also contain :input, :output
+   (schema), :requires, and :async?.
    The :input/:output keys become the cell's :schema. Extra keys (:doc, :requires,
    :async?) are lifted to the top-level spec.
 
    Examples:
      ;; Minimal — no schema
      (defcell :order/compute-tax
+       {:doc \"Computes sales tax on the order subtotal\"}
        (fn [resources data] {:tax (* (:subtotal data) 0.1)}))
 
      ;; With schema
      (defcell :order/compute-tax
-       {:input  [:map [:subtotal :double]]
+       {:doc    \"Computes sales tax on the order subtotal\"
+        :input  [:map [:subtotal :double]]
         :output [:map [:tax :double]]}
        (fn [resources data] {:tax (* (:subtotal data) 0.1)}))
 
      ;; With schema + opts
      (defcell :order/compute-tax
-       {:input    [:map [:subtotal :double]]
+       {:doc      \"Computes sales tax using regional tax rate tables\"
+        :input    [:map [:subtotal :double]]
         :output   [:map [:tax :double]]
-        :doc      \"Computes tax\"
         :requires [:tax-rates]}
        (fn [resources data] {:tax (* (:subtotal data) 0.1)}))"
-  ([cell-id handler-fn]
-   (defcell cell-id nil handler-fn))
-  ([cell-id opts handler-fn]
-   (let [schema-keys #{:input :output}
-         opt-keys    #{:doc :requires :async?}
-         raw-schema  (when opts
-                       (let [s (select-keys opts schema-keys)]
-                         (when (seq s) s)))
-         dispatched? (and raw-schema (output-dispatched? (:output raw-schema)))
-         schema      (when raw-schema
-                       (schema/normalize-cell-schema raw-schema dispatched?))
-         extra       (when opts (select-keys opts opt-keys))
-         spec        (cond-> {:id cell-id :handler handler-fn}
-                       schema (assoc :schema schema)
-                       (:doc extra) (assoc :doc (:doc extra))
-                       (:requires extra) (assoc :requires (:requires extra))
-                       (:async? extra) (assoc :async? (:async? extra)))]
-     (.addMethod cell-spec cell-id (constantly spec))
-     spec)))
+  [cell-id opts handler-fn]
+  (when-not (and (map? opts) (string? (:doc opts)) (seq (:doc opts)))
+    (throw (ex-info (str "defcell " cell-id ": opts map with non-empty :doc string is required")
+                    {:id cell-id})))
+  (let [schema-keys #{:input :output}
+        opt-keys    #{:doc :requires :async?}
+        raw-schema  (let [s (select-keys opts schema-keys)]
+                      (when (seq s) s))
+        dispatched? (and raw-schema (output-dispatched? (:output raw-schema)))
+        schema      (when raw-schema
+                      (schema/normalize-cell-schema raw-schema dispatched?))
+        extra       (select-keys opts opt-keys)
+        spec        (cond-> {:id cell-id :handler handler-fn :doc (:doc extra)}
+                      schema (assoc :schema schema)
+                      (:requires extra) (assoc :requires (:requires extra))
+                      (:async? extra) (assoc :async? (:async? extra)))]
+    (.addMethod cell-spec cell-id (constantly spec))
+    spec))

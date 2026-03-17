@@ -171,6 +171,7 @@
   (testing "Unconditional edge (keyword target) needs no dispatch entry"
     (let [m {:id :test/simple
              :cells {:start {:id :test/simple-cell
+                              :doc "Simple passthrough cell"
                               :schema {:input [:map] :output [:map]}
                               :on-error nil}}
              :edges {:start :end}}]
@@ -183,7 +184,7 @@
    :doc "A workflow with a join node"
    :cells {:start
            {:id       :test/jm-start
-            :doc      "Start"
+            :doc      "Start cell for join workflow"
             :schema   {:input  [:map [:x :int]]
                        :output {:success [:map [:user-id :string]]
                                 :failure [:map [:error :string]]}}
@@ -191,21 +192,21 @@
             :requires []}
            :fetch-a
            {:id       :test/jm-fetch-a
-            :doc      "Fetch A"
+            :doc      "Fetch resource A"
             :schema   {:input  [:map [:user-id :string]]
                        :output [:map [:profile [:map [:name :string]]]]}
             :on-error nil
             :requires []}
            :fetch-b
            {:id       :test/jm-fetch-b
-            :doc      "Fetch B"
+            :doc      "Fetch resource B"
             :schema   {:input  [:map [:user-id :string]]
                        :output [:map [:orders [:vector :map]]]}
             :on-error nil
             :requires []}
            :render
            {:id       :test/jm-render
-            :doc      "Render"
+            :doc      "Render combined results"
             :schema   {:input  [:map
                                 [:profile [:map [:name :string]]]
                                 [:orders [:vector :map]]]
@@ -246,6 +247,7 @@
                  :output [:map [:y :int]]}})
     (let [m {:id :test/inherit
              :cells {:start {:id       :test/inherit-cell
+                              :doc      "Inherits schema from registry"
                               :schema   :inherit
                               :on-error nil}}
              :edges {:start :end}}
@@ -258,6 +260,7 @@
   (testing ":schema :inherit for unregistered cell throws"
     (let [m {:id :test/inherit-bad
              :cells {:start {:id       :test/nonexistent-cell
+                              :doc      "Should fail"
                               :schema   :inherit
                               :on-error nil}}
              :edges {:start :end}}]
@@ -271,6 +274,7 @@
        :handler (fn [_ data] data)})
     (let [m {:id :test/inherit-no-schema
              :cells {:start {:id       :test/no-schema-cell
+                              :doc      "Should fail"
                               :schema   :inherit
                               :on-error nil}}
              :edges {:start :end}}]
@@ -286,6 +290,7 @@
                  :output [:map [:y :int]]}})
     (let [m {:id :test/inherit-e2e-wf
              :cells {:start {:id       :test/inherit-e2e
+                              :doc      "Doubles x into y, schema inherited"
                               :schema   :inherit
                               :on-error nil}}
              :edges {:start :end}}
@@ -300,12 +305,15 @@
     (let [m {:id :test/pipeline
              :pipeline [:start :process :render]
              :cells {:start   {:id :test/p-start
+                                :doc "Pipeline start"
                                 :schema {:input [:map] :output [:map [:x :int]]}
                                 :on-error nil}
                      :process {:id :test/p-process
+                                :doc "Pipeline process"
                                 :schema {:input [:map [:x :int]] :output [:map [:y :int]]}
                                 :on-error nil}
                      :render  {:id :test/p-render
+                                :doc "Pipeline render"
                                 :schema {:input [:map [:y :int]] :output [:map [:html :string]]}
                                 :on-error nil}}}
           result (manifest/validate-manifest m)]
@@ -320,6 +328,7 @@
     (let [m {:id :test/pipeline-single
              :pipeline [:start]
              :cells {:start {:id :test/ps-start
+                              :doc "Single pipeline cell"
                               :schema {:input [:map] :output [:map]}
                               :on-error nil}}}
           result (manifest/validate-manifest m)]
@@ -330,6 +339,7 @@
     (let [m {:id :test/pipeline-conflict
              :pipeline [:start]
              :cells {:start {:id :test/pc-start
+                              :doc "Conflict test"
                               :schema {:input [:map] :output [:map]}
                               :on-error nil}}
              :edges {:start :end}}]
@@ -341,6 +351,7 @@
     (let [m {:id :test/pipeline-disp
              :pipeline [:start]
              :cells {:start {:id :test/pd-start
+                              :doc "Dispatch conflict test"
                               :schema {:input [:map] :output [:map]}
                               :on-error nil}}
              :dispatches {}}]
@@ -352,6 +363,7 @@
     (let [m {:id :test/pipeline-frag
              :pipeline [:start]
              :cells {:start {:id :test/pf-start
+                              :doc "Fragment conflict test"
                               :schema {:input [:map] :output [:map]}
                               :on-error nil}}
              :fragments {:f {}}}]
@@ -363,6 +375,7 @@
     (let [m {:id :test/pipeline-join
              :pipeline [:start]
              :cells {:start {:id :test/pj-start
+                              :doc "Join conflict test"
                               :schema {:input [:map] :output [:map]}
                               :on-error nil}}
              :joins {:j {:cells [:start]}}}]
@@ -374,6 +387,7 @@
     (let [m {:id :test/pipeline-unknown
              :pipeline [:start :nonexistent]
              :cells {:start {:id :test/pu-start
+                              :doc "Unknown cell ref test"
                               :schema {:input [:map] :output [:map]}
                               :on-error nil}}}]
       (is (thrown-with-msg? Exception #"not in :cells"
@@ -384,6 +398,7 @@
     (let [m {:id :test/pipeline-empty
              :pipeline []
              :cells {:start {:id :test/pe-start
+                              :doc "Empty pipeline test"
                               :schema {:input [:map] :output [:map]}
                               :on-error nil}}}]
       (is (thrown-with-msg? Exception #"at least 1"
@@ -395,6 +410,7 @@
   (testing "Manifest with :params on a cell def passes validation"
     (let [m {:id :test/param-wf
              :cells {:start {:id       :test/pm-cell
+                              :doc      "Parameterized cell"
                               :schema   {:input [:map [:x :int]] :output [:map [:y :int]]}
                               :params   {:multiplier 3}
                               :on-error nil}}
@@ -405,6 +421,7 @@
   (testing "manifest->workflow passes params through to workflow cells map"
     (let [m {:id :test/param-wf2
              :cells {:start {:id       :test/pm-cell2
+                              :doc      "Parameterized cell with mode"
                               :schema   {:input [:map [:x :int]] :output [:map [:y :int]]}
                               :params   {:mode "fast"}
                               :on-error nil}}
@@ -428,10 +445,12 @@
     (let [m {:id :test/param-pipeline
              :pipeline [:start :step-b]
              :cells {:start  {:id       :test/pm-adder
+                                :doc      "Adds amount to x (first pass)"
                                 :schema   :inherit
                                 :params   {:amount 10 :output-key :first}
                                 :on-error nil}
                      :step-b {:id       :test/pm-adder
+                                :doc      "Adds amount to x (second pass)"
                                 :schema   :inherit
                                 :params   {:amount 100 :output-key :second}
                                 :on-error nil}}}
@@ -447,6 +466,7 @@
   (testing "Manifest with :resilience passes validation"
     (let [m {:id :test/res-wf
              :cells {:start {:id       :test/res-cell
+                              :doc      "Resilience test cell"
                               :schema   {:input [:map [:x :int]] :output [:map [:y :int]]}
                               :on-error nil}}
              :edges {:start :end}
@@ -457,6 +477,7 @@
   (testing "manifest->workflow passes :resilience through"
     (let [m {:id :test/res-wf2
              :cells {:start {:id       :test/res-cell2
+                              :doc      "Resilience passthrough test"
                               :schema   {:input [:map [:x :int]] :output [:map [:y :int]]}
                               :on-error nil}}
              :edges {:start :end}
@@ -477,9 +498,11 @@
     (let [m {:id :test/pipeline-e2e
              :pipeline [:start :format]
              :cells {:start  {:id :test/pipe-double
+                               :doc "Doubles x into y"
                                :schema {:input [:map [:x :int]] :output [:map [:y :int]]}
                                :on-error nil}
                      :format {:id :test/pipe-format
+                               :doc "Formats y as string"
                                :schema {:input [:map [:y :int]] :output [:map [:result :string]]}
                                :on-error nil}}}
           validated (manifest/validate-manifest m)

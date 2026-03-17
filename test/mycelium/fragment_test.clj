@@ -17,6 +17,7 @@
    :cells
    {:extract-session
     {:id     :auth/extract-cookie-session
+     :doc    "Extracts auth token from HTTP cookie session"
      :schema {:input  [:map [:http-request [:map]]]
               :output {:success [:map [:auth-token :string]]
                        :failure [:map [:error-type :keyword]
@@ -24,6 +25,7 @@
      :on-error :_exit/failure}
     :validate-session
     {:id     :auth/validate-session
+     :doc    "Validates auth token against session store"
      :schema {:input  [:map [:auth-token :string]]
               :output {:authorized   [:map [:session-valid :boolean]
                                            [:user-id :string]]
@@ -196,10 +198,12 @@
                 :entry :extract
                 :exits [:success :failure]
                 :cells {:extract  {:id     :frag/extract
+                                   :doc    "Extracts auth token from request"
                                    :schema {:input  [:map [:http-request [:map]]]
                                             :output {:success [:map [:auth-token :string]]
                                                      :failure [:map [:error-type :keyword]]}}}
                         :validate {:id     :frag/validate
+                                   :doc    "Validates auth token"
                                    :schema {:input  [:map [:auth-token :string]]
                                             :output {:authorized   [:map [:session-valid :boolean] [:user-id :string]]
                                                      :unauthorized [:map [:session-valid :boolean] [:error-type :keyword]]}}}}
@@ -217,9 +221,11 @@
                                             :exits    {:success :render-dashboard
                                                        :failure :render-error}}}
                          :cells {:render-dashboard {:id     :frag/render-dashboard
+                                                    :doc    "Renders the dashboard page"
                                                     :schema {:input [:map [:user-id :string]]
                                                              :output [:map [:html :string]]}}
                                  :render-error     {:id     :frag/render-error
+                                                    :doc    "Renders an error page"
                                                     :schema {:input [:map]
                                                              :output [:map [:html :string]]}}}
                          :edges {:render-dashboard {:done :end}
@@ -239,6 +245,7 @@
                   :entry :cell-a
                   :exits [:done]
                   :cells {:cell-a {:id     :frag/cell-a
+                                   :doc    "Fragment A cell"
                                    :schema {:input [:map] :output [:map [:a-out :int]]}}}
                   :edges {:cell-a {:done :_exit/done}}
                   :dispatches {:cell-a [[:done (constantly true)]]}}
@@ -246,6 +253,7 @@
                   :entry :cell-b
                   :exits [:done]
                   :cells {:cell-b {:id     :frag/cell-b
+                                   :doc    "Fragment B cell"
                                    :schema {:input [:map [:a-out :int]] :output [:map [:b-out :int]]}}}
                   :edges {:cell-b {:done :_exit/done}}
                   :dispatches {:cell-b [[:done (constantly true)]]}}
@@ -257,6 +265,7 @@
                                       :as       :phase-b
                                       :exits    {:done :end-cell}}}
                 :cells {:end-cell {:id     :frag/end-cell
+                                   :doc    "Final cell in two-fragment workflow"
                                    :schema {:input [:map [:b-out :int]]
                                             :output [:map [:result :string]]}}}
                 :edges {:end-cell {:done :end}}
@@ -317,6 +326,7 @@
                 :entry :produce
                 :exits [:done]
                 :cells {:produce {:id     :frag-chain/start
+                                  :doc    "Produces auth token from input"
                                   :schema {:input [:map [:x :int]]
                                            :output [:map [:token :string]]}}}
                 :edges {:produce {:done :_exit/done}}
@@ -326,6 +336,7 @@
                                        :as       :start
                                        :exits    {:done :consumer}}}
                 :cells {:consumer {:id     :frag-chain/consumer
+                                   :doc    "Consumes token and produces result"
                                    :schema {:input  [:map [:token :string]]
                                             :output [:map [:result :string]]}}}
                 :edges {:consumer {:done :end}}
@@ -340,18 +351,18 @@
 (deftest fragment-expansion-deterministic-order-test
   (testing "Multiple fragments expand in sorted key order for deterministic collision checks"
     (let [frag-a {:id :frag-a :entry :ca :exits [:done]
-                  :cells {:ca {:id :det/ca :schema {:input [:map] :output [:map [:a :int]]}}}
+                  :cells {:ca {:id :det/ca :doc "Deterministic cell A" :schema {:input [:map] :output [:map [:a :int]]}}}
                   :edges {:ca {:done :_exit/done}}
                   :dispatches {:ca [[:done (constantly true)]]}}
           frag-z {:id :frag-z :entry :cz :exits [:done]
-                  :cells {:cz {:id :det/cz :schema {:input [:map [:a :int]] :output [:map [:z :int]]}}}
+                  :cells {:cz {:id :det/cz :doc "Deterministic cell Z" :schema {:input [:map [:a :int]] :output [:map [:z :int]]}}}
                   :edges {:cz {:done :_exit/done}}
                   :dispatches {:cz [[:done (constantly true)]]}}
           ;; Use keys :z-frag and :a-frag so sorted order is :a-frag first
           host {:id :det-host
                 :fragments {:z-frag {:fragment frag-z :as :step-z :exits {:done :end-cell}}
                             :a-frag {:fragment frag-a :as :start :exits {:done :step-z}}}
-                :cells {:end-cell {:id :det/end :schema {:input [:map [:z :int]] :output [:map [:out :string]]}}}
+                :cells {:end-cell {:id :det/end :doc "Final deterministic cell" :schema {:input [:map [:z :int]] :output [:map [:out :string]]}}}
                 :edges {:end-cell {:done :end}}
                 :dispatches {:end-cell [[:done (constantly true)]]}}
           ;; Expand multiple times — result must be identical every time
@@ -379,6 +390,7 @@
                 :entry :step
                 :exits [:done]
                 :cells {:step {:id     :frag-nodispatch/step
+                               :doc    "Marks done flag"
                                :schema {:input [:map] :output [:map [:done :boolean]]}}}
                 :edges {:step :_exit/done}}
           host {:id    :nodispatch-host
@@ -386,6 +398,7 @@
                                     :as       :start
                                     :exits    {:done :finish}}}
                 :cells {:finish {:id     :frag-nodispatch/end
+                                 :doc    "Produces final result"
                                  :schema {:input [:map [:done :boolean]]
                                           :output [:map [:result :string]]}
                                  :on-error nil}}
@@ -410,6 +423,7 @@
                 :entry :step
                 :exits [:done]
                 :cells {:step {:id     :frag/inherit-cell
+                               :doc    "Inherits schema from registry"
                                :schema :inherit}}
                 :edges {:step {:done :_exit/done}}
                 :dispatches {:step [[:done (constantly true)]]}}]

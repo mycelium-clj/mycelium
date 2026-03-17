@@ -13,7 +13,8 @@
 (deftest key-diff-typo-suggestion-test
   (testing "Schema error suggests rename when extra key is close to missing key"
     (cell/defcell :test/tax
-      {:input  {:subtotal :double}
+      {:doc    "Computes tax from subtotal"
+       :input  {:subtotal :double}
        :output {:tax :double}}
       ;; Intentional typo: :tax-amount instead of :tax
       (fn [_ data] {:tax-amount (* (:subtotal data) 0.1)}))
@@ -34,7 +35,8 @@
 (deftest key-diff-multiple-keys-test
   (testing "Schema error shows all missing and extra keys"
     (cell/defcell :test/multi-key
-      {:input  {:x :int}
+      {:doc    "Produces alpha, beta, gamma from input x"
+       :input  {:x :int}
        :output {:alpha :string :beta :int :gamma :double}}
       ;; Return wrong keys
       (fn [_ data] {:alfa "hello" :betta 42 :gama 3.14}))
@@ -54,7 +56,8 @@
 (deftest key-diff-genuinely-missing-test
   (testing "Missing key with no close extra key has no suggestion"
     (cell/defcell :test/missing
-      {:input  {:x :int}
+      {:doc    "Doubles x and adds a status flag"
+       :input  {:x :int}
        :output {:result :int :status :keyword}}
       ;; Only return :result, forget :status entirely
       (fn [_ data] {:result (* 2 (:x data))}))
@@ -73,14 +76,16 @@
 (deftest key-diff-extra-no-match-test
   (testing "Extra keys are reported even without close match to missing keys"
     (cell/defcell :test/extra
-      {:input  {:x :int}
+      {:doc    "Doubles x into y"
+       :input  {:x :int}
        :output {:y :int}}
       ;; Return correct key plus unexpected extra
       (fn [_ data] {:y (* 2 (:x data)) :debug-info "should not be here"}))
     ;; Open-map semantics: extra keys pass through, no error on output
     ;; This test verifies the key-diff captures extras when there IS a schema failure
     (cell/defcell :test/extra-wrong
-      {:input  {:x :int}
+      {:doc    "Should produce y but intentionally returns z"
+       :input  {:x :int}
        :output {:y :int}}
       ;; Missing required :y, has extra :z
       (fn [_ data] {:z 999}))
@@ -98,7 +103,8 @@
 (deftest workflow-error-enhanced-message-test
   (testing "workflow-error message includes suggestion text"
     (cell/defcell :test/msg
-      {:input  {:name :string}
+      {:doc    "Greets the user by name"
+       :input  {:name :string}
        :output {:greeting :string}}
       ;; Typo: :greting instead of :greeting
       (fn [_ data] {:greting (str "Hello " (:name data))}))
@@ -117,7 +123,8 @@
 (deftest key-diff-input-validation-test
   (testing "Key-diff suggestions work for input schema errors"
     (cell/defcell :test/input-typo
-      {:input  {:username :string :email :string}
+      {:doc    "Validates username and email"
+       :input  {:username :string :email :string}
        :output {:valid :boolean}}
       (fn [_ data] {:valid true}))
     (let [result (myc/run-workflow

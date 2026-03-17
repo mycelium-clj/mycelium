@@ -12,6 +12,7 @@ Register cells via `defmethod` on the `cell/cell-spec` multimethod:
 
 (defmethod cell/cell-spec :auth/parse-request [_]
   {:id       :auth/parse-request
+   :doc      "Extracts the auth token from the HTTP request body. Returns the token on success, or an error describing why the token is missing."
    :handler  (fn [_resources data]
                (let [body (get-in data [:http-request :body])]
                  (if-let [token (get body "auth-token")]
@@ -30,11 +31,11 @@ Register cells via `defmethod` on the `cell/cell-spec` multimethod:
 | Field | Required | Description |
 |-------|----------|-------------|
 | `:id` | yes | Keyword identifier, conventionally `namespace/name` (e.g. `:auth/parse-request`) |
+| `:doc` | yes | Non-empty string describing the cell's purpose and semantics — helps LLMs understand how the cell should be used |
 | `:handler` | yes | `(fn [resources data] -> data)` for sync, or `(fn [resources data callback error-callback])` for async |
 | `:schema` | yes | Map with `:input` (Malli schema) and `:output` (single schema or per-transition map) |
 | `:requires` | no | Vector of resource keys the handler needs (e.g. `[:db]`) |
 | `:async?` | no | Set to `true` for async handlers |
-| `:doc` | no | Documentation string |
 
 ## Handler Signature
 
@@ -103,6 +104,7 @@ The transition keys in the output map must match the dispatch labels defined in 
 ```clojure
 (defmethod cell/cell-spec :user/fetch-profile [_]
   {:id       :user/fetch-profile
+   :doc      "Looks up a user profile by user-id from the database. Returns the profile on success, or a not-found error."
    :handler  (fn [{:keys [db]} data]
                (if-let [profile (db/get-user db (:user-id data))]
                  (assoc data :profile profile)
@@ -118,6 +120,7 @@ The transition keys in the output map must match the dispatch labels defined in 
 ```clojure
 (defmethod cell/cell-spec :api/fetch-data [_]
   {:id       :api/fetch-data
+   :doc      "Fetches data from an external URL asynchronously. Returns the raw HTTP response."
    :handler  (fn [_resources data callback error-callback]
                (future
                  (try

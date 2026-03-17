@@ -25,7 +25,8 @@
 (deftest generate-stubs-with-schemas-test
   (testing "generate-stubs includes schema from cell definitions"
     (cell/defcell :stub/with-schema
-      {:input  [:map [:x :int]]
+      {:doc    "Passes data through with x/y schema"
+       :input  [:map [:x :int]]
        :output [:map [:y :int]]}
       (fn [_ data] data))
     (let [stubs (dev/generate-stubs
@@ -63,7 +64,8 @@
 (deftest generate-stubs-branching-output-test
   (testing "generate-stubs handles per-transition output schemas"
     (cell/defcell :stub/branching
-      {:input  [:map [:x :int]]
+      {:doc    "Classifies input as high or low"
+       :input  [:map [:x :int]]
        :output {:high [:map [:result [:= :high]]]
                 :low  [:map [:result [:= :low]]]}}
       (fn [_ data] data))
@@ -80,7 +82,8 @@
 (deftest generate-stubs-with-requires-test
   (testing "generate-stubs includes :requires from cell spec"
     (cell/defcell :stub/needs-db
-      {:input    [:map [:id :string]]
+      {:doc      "Fetches user by id from database"
+       :input    [:map [:id :string]]
        :output   [:map [:user :map]]
        :requires [:db]}
       (fn [{:keys [db]} data] data))
@@ -95,9 +98,9 @@
 (deftest generate-stubs-with-doc-test
   (testing "generate-stubs includes :doc from cell spec"
     (cell/defcell :stub/documented
-      {:input  [:map]
-       :output [:map]
-       :doc    "Validates user input"}
+      {:doc    "Validates user input"
+       :input  [:map]
+       :output [:map]}
       (fn [_ data] data))
     (let [stubs (dev/generate-stubs
                   {:cells {:start :stub/documented}

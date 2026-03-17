@@ -70,7 +70,8 @@
 (deftest defcell-lite-schema-test
   (testing "defcell normalizes lite input schema"
     (cell/defcell :test/lite-input
-      {:input {:x :int :y :int}
+      {:doc    "Sums x and y"
+       :input {:x :int :y :int}
        :output [:map [:sum :int]]}
       (fn [_ data] {:sum (+ (:x data) (:y data))}))
     (let [spec (cell/get-cell :test/lite-input)]
@@ -79,7 +80,8 @@
 
   (testing "defcell normalizes lite output schema"
     (cell/defcell :test/lite-output
-      {:input [:map [:x :int]]
+      {:doc    "Doubles x"
+       :input [:map [:x :int]]
        :output {:doubled :int}}
       (fn [_ data] {:doubled (* 2 (:x data))}))
     (let [spec (cell/get-cell :test/lite-output)]
@@ -88,7 +90,8 @@
 
   (testing "defcell normalizes both input and output lite schemas"
     (cell/defcell :test/lite-both
-      {:input  {:x :int}
+      {:doc    "Increments x into y"
+       :input  {:x :int}
        :output {:y :int}}
       (fn [_ data] {:y (inc (:x data))}))
     (let [spec (cell/get-cell :test/lite-both)]
@@ -97,7 +100,8 @@
 
   (testing "defcell with per-transition vector output is unchanged"
     (cell/defcell :test/per-transition
-      {:input  {:x :int}
+      {:doc    "Classifies x as high or low"
+       :input  {:x :int}
        :output {:high [:map [:result [:= :high]]]
                 :low  [:map [:result [:= :low]]]}}
       (fn [_ data]
@@ -112,6 +116,7 @@
 (deftest set-cell-schema-lite-test
   (testing "set-cell-schema! normalizes lite schemas"
     (cell/defcell :test/schema-override
+      {:doc "Increments x into y"}
       (fn [_ data] {:y (inc (:x data))}))
     (cell/set-cell-schema! :test/schema-override
                            {:input {:x :int} :output {:y :int}})
@@ -124,6 +129,7 @@
 (deftest set-cell-meta-normalized-test
   (testing "set-cell-meta! works with pre-normalized lite schemas"
     (cell/defcell :test/meta-override
+      {:doc "Passthrough cell for meta override testing"}
       (fn [_ data] data))
     ;; Simulate what manifest->workflow does: normalize first, then set-cell-meta!
     (let [normalized (schema/normalize-cell-schema
@@ -138,7 +144,8 @@
 (deftest lite-schema-workflow-e2e-test
   (testing "Workflow runs with lite schemas in defcell"
     (cell/defcell :test/greet
-      {:input  {:name :string}
+      {:doc    "Greets the user by name"
+       :input  {:name :string}
        :output {:greeting :string}}
       (fn [_ data] {:greeting (str "Hello, " (:name data) "!")}))
     (let [result (myc/run-workflow
@@ -150,7 +157,8 @@
 
   (testing "Workflow with nested lite schemas validates correctly"
     (cell/defcell :test/extract-city
-      {:input  {:address {:street :string :city :string}}
+      {:doc    "Extracts city from nested address map"
+       :input  {:address {:street :string :city :string}}
        :output {:city :string}}
       (fn [_ data] {:city (get-in data [:address :city])}))
     (let [result (myc/run-workflow
@@ -162,7 +170,8 @@
 
   (testing "Workflow rejects invalid input against lite schema"
     (cell/defcell :test/typed-add
-      {:input  {:x :int :y :int}
+      {:doc    "Adds two integers x and y"
+       :input  {:x :int :y :int}
        :output {:sum :int}}
       (fn [_ data] {:sum (+ (:x data) (:y data))}))
     (let [on-error (fn [_resources fsm-state] (:data fsm-state))
@@ -177,9 +186,11 @@
 (deftest manifest-lite-schema-test
   (testing "Manifest with lite schemas validates via manifest->workflow"
     (cell/defcell :test/compute
+      {:doc "Doubles x into result"}
       (fn [_ data] {:result (* 2 (:x data))}))
     (let [m {:id :test-workflow
              :cells {:start {:id :test/compute
+                              :doc "Doubles x into result"
                               :schema {:input {:x :int}
                                        :output {:result :int}}
                               :on-error nil}}
@@ -195,12 +206,14 @@
 
   (testing "Manifest with per-transition lite schemas normalizes correctly"
     (cell/defcell :test/branch
+      {:doc "Classifies x as positive or negative"}
       (fn [_ data]
         (if (pos? (:x data))
           {:sign :positive}
           {:sign :negative})))
     (let [m {:id :test-branch-wf
              :cells {:start {:id :test/branch
+                              :doc "Classifies x as positive or negative"
                               :schema {:input {:x :int}
                                        :output {:positive {:sign :keyword}
                                                 :negative {:sign :keyword}}}

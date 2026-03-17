@@ -13,6 +13,7 @@
           (manifest/validate-manifest
            {:id :test/strict-wf
             :cells {:start {:id     :test/strict-cell
+                            :doc    "Strict mode test cell"
                             :schema {:input [:map] :output [:map]}}}
             :edges {:start :end}})))))
 
@@ -23,6 +24,7 @@
     (let [result (manifest/validate-manifest
                   {:id :test/nil-on-error-wf
                    :cells {:start {:id       :test/nil-err-cell
+                                   :doc      "Cell with nil on-error"
                                    :schema   {:input [:map] :output [:map]}
                                    :on-error nil}}
                    :edges {:start :end}}
@@ -36,9 +38,11 @@
     (let [result (manifest/validate-manifest
                   {:id :test/valid-on-error-wf
                    :cells {:start        {:id       :test/oe-start
+                                          :doc      "Start cell with error handler"
                                           :schema   {:input [:map] :output [:map [:y :int]]}
                                           :on-error :render-error}
                            :render-error {:id       :test/oe-error
+                                          :doc      "Renders error page"
                                           :schema   {:input [:map] :output [:map [:html :string]]}
                                           :on-error nil}}
                    :edges {:start        {:ok :end :fail :render-error}
@@ -57,6 +61,7 @@
           (manifest/validate-manifest
            {:id :test/bad-on-error-wf
             :cells {:start {:id       :test/bad-oe-cell
+                            :doc      "Cell with bad on-error target"
                             :schema   {:input [:map] :output [:map]}
                             :on-error :nonexistent}}
             :edges {:start :end}}
@@ -69,6 +74,7 @@
     (let [result (manifest/validate-manifest
                   {:id :test/non-strict-wf
                    :cells {:start {:id     :test/ns-cell
+                                   :doc    "Non-strict cell without on-error"
                                    :schema {:input [:map] :output [:map]}}}
                    :edges {:start :end}}
                   {:strict? false})]
@@ -82,6 +88,7 @@
           (manifest/validate-manifest
            {:id :test/ns-bad-target-wf
             :cells {:start {:id       :test/ns-bad-cell
+                            :doc      "Cell with ghost on-error target"
                             :schema   {:input [:map] :output [:map]}
                             :on-error :ghost}}
             :edges {:start :end}})))))

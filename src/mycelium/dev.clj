@@ -419,17 +419,15 @@
                          has-schema? (some? schema)
                          input-schema (:input schema)
                          output-schema (:output schema)
-                         opts-parts (cond-> []
+                         doc-str (or doc (str "TODO: document " cell-id))
+                         opts-parts (cond-> [(str " :doc    " (pr-str doc-str))]
                                       input-schema
                                       (conj (str " :input  " (pr-str input-schema)))
                                       output-schema
                                       (conj (str " :output " (format-schema-value output-schema)))
-                                      doc
-                                      (conj (str " :doc    " (pr-str doc)))
                                       requires
                                       (conj (str " :requires " (pr-str (vec requires)))))
-                         opts-str (when (seq opts-parts)
-                                    (str "\n  {" (str/join "\n   " opts-parts) "}"))
+                         opts-str (str "\n  {" (str/join "\n   " opts-parts) "}")
                          handler-str (if requires
                                        (str "(fn [{:keys ["
                                             (str/join " " (map name requires))
@@ -438,7 +436,7 @@
                                        (str "(fn [_resources data]\n    ;; TODO: implement " cell-name
                                             "\n    data)"))]
                      (str "(cell/defcell " cell-id
-                          (or opts-str "")
+                          opts-str
                           "\n  " handler-str ")")))
                  (sort-by first cells))))
 

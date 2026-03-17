@@ -12,8 +12,10 @@
 (deftest infer-schemas-single-input-test
   (testing "Infers input/output schemas for each cell from a single test run"
     (cell/defcell :test/double
+      {:doc "Doubles the input x value into result"}
       (fn [_ data] {:result (* 2 (:x data))}))
     (cell/defcell :test/format
+      {:doc "Formats the result as a human-readable message"}
       (fn [_ data] {:message (str "Result: " (:result data))}))
     (let [wf-def  {:cells {:start :test/double
                            :fmt   :test/format}
@@ -33,6 +35,7 @@
 (deftest infer-schemas-multiple-inputs-test
   (testing "Multiple inputs produce schema covering all variants"
     (cell/defcell :test/classify
+      {:doc "Classifies input x as positive or negative, optionally preserving label"}
       (fn [_ data]
         (cond-> {:category (if (pos? (:x data)) :positive :negative)}
           (:label data) (assoc :label (:label data)))))
@@ -54,6 +57,7 @@
 (deftest inferred-schemas-validate-test
   (testing "Inferred schemas validate against the original test data"
     (cell/defcell :test/enrich
+      {:doc "Enriches input by extracting name and marking as enriched"}
       (fn [_ data] {:enriched true :original (:name data)}))
     (let [wf-def  {:cells {:start :test/enrich}
                    :edges {:start :end}}
@@ -70,6 +74,7 @@
 (deftest apply-inferred-schemas-test
   (testing "apply-inferred-schemas! updates cell schemas in registry"
     (cell/defcell :test/compute
+      {:doc "Triples the input x value"}
       (fn [_ data] {:result (* 3 (:x data))}))
     (let [wf-def  {:cells {:start :test/compute}
                    :edges {:start :end}}
@@ -85,6 +90,7 @@
 (deftest infer-apply-strict-roundtrip-test
   (testing "Infer → apply → strict run passes for matching data"
     (cell/defcell :test/roundtrip
+      {:doc "Doubles the input n value"}
       (fn [_ data] {:doubled (* 2 (:n data))}))
     (let [wf-def   {:cells {:start :test/roundtrip}
                     :edges {:start :end}}
@@ -100,10 +106,13 @@
 (deftest infer-schemas-multi-cell-test
   (testing "Infers schemas across a multi-cell workflow"
     (cell/defcell :test/step-a
+      {:doc "Increments x into a-out"}
       (fn [_ data] {:a-out (inc (:x data))}))
     (cell/defcell :test/step-b
+      {:doc "Doubles a-out into b-out"}
       (fn [_ data] {:b-out (* 2 (:a-out data))}))
     (cell/defcell :test/step-c
+      {:doc "Formats b-out into final string"}
       (fn [_ data] {:final (str "done:" (:b-out data))}))
     (let [wf-def  {:cells {:start :test/step-a
                            :b     :test/step-b
