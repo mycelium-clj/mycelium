@@ -1,19 +1,27 @@
 (ns mycelium.compose
   "Hierarchical composition: wrapping workflows as cells for nesting."
   (:require [mycelium.cell :as cell]
+            [mycelium.schema :as schema]
             [mycelium.workflow :as wf]
             [maestro.core :as fsm]
             [promesa.core :as p]))
 
 (defn- get-map-entries
   "Extracts top-level entries from a Malli :map schema.
-   Returns a vector of [key type] pairs, or nil if not a :map schema."
+   Handles both normalized [:map [:k v] ...] and lite syntax {:k v}.
+   Returns a vector of [key type] pairs, or nil if not a map schema."
   [schema]
-  (when (and (vector? schema) (= :map (first schema)))
+  (cond
+    ;; Standard Malli vector syntax: [:map [:k1 v1] [:k2 v2] ...]
+    (and (vector? schema) (= :map (first schema)))
     (vec (keep (fn [entry]
                  (when (vector? entry)
                    [(first entry) (second entry)]))
-               (rest schema)))))
+               (rest schema)))
+
+    ;; Lite map syntax: {:k1 v1 :k2 v2}
+    (map? schema)
+    (vec (map (fn [[k v]] [k v]) schema))))
 
 (defn- output-entries-for-edge
   "Extracts [key type] entries from a cell's output schema for edges routing to :end."
@@ -82,9 +90,11 @@
 
    `cell-id`  - the ID for the resulting cell
    `workflow`  - workflow definition map {:cells ... :edges ... :dispatches ...}
-   `schema`    - {:input [...] :output [...]} for the cell"
+   `schema`    - {:input [...] :output [...]} for the cell.
+                 Lite map syntax is normalized automatically."
   [cell-id workflow schema]
-  (let [compiled (wf/compile-workflow workflow
+  (let [schema (schema/normalize-cell-schema schema)
+        compiled (wf/compile-workflow workflow
                                       {:on-error (fn [_ fsm-state]
                                                    (-> (:data fsm-state)
                                                        (assoc :mycelium/error

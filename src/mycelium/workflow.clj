@@ -85,14 +85,21 @@
 ;; ===== Schema key utilities =====
 
 (defn- get-map-keys
-  "Extracts top-level keys from a Malli :map schema. Returns nil if not a :map schema.
+  "Extracts top-level keys from a Malli schema. Returns nil if not a map schema.
+   Handles both normalized [:map [:k v] ...] and lite syntax {:k v}.
    Skips Malli property maps (e.g. {:closed true} in [:map {:closed true} [:x :int]])."
   [schema]
-  (when (and (vector? schema) (= :map (first schema)))
+  (cond
+    ;; Standard Malli vector syntax: [:map [:k1 v1] [:k2 v2] ...]
+    (and (vector? schema) (= :map (first schema)))
     (set (keep (fn [entry]
                  (when (vector? entry)
                    (first entry)))
-               (rest schema)))))
+               (rest schema)))
+
+    ;; Lite map syntax: {:k1 v1 :k2 v2}
+    (map? schema)
+    (set (keys schema))))
 
 (defn- get-output-keys-for-transition
   "Gets output keys for a specific transition of a cell.
