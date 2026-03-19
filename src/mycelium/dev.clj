@@ -282,14 +282,20 @@
      :cycles         (mapv (fn [cycle] (mapv resolve-name cycle)) (:cycles analysis))}))
 
 (defn- get-map-keys
-  "Extracts top-level key names from a Malli :map schema. Returns #{} if not a :map schema."
+  "Extracts top-level key names from a Malli schema. Returns #{} if not a map schema.
+   Handles both [:map [:k v] ...] and lite syntax {:k v}."
   [schema]
-  (if (and (vector? schema) (= :map (first schema)))
+  (cond
+    (and (vector? schema) (= :map (first schema)))
     (set (keep (fn [entry]
                  (when (vector? entry)
                    (first entry)))
                (rest schema)))
-    #{}))
+
+    (map? schema)
+    (set (keys schema))
+
+    :else #{}))
 
 (defn- cell-output-keys
   "Returns the union of all output keys for a cell across all transitions."
