@@ -14,16 +14,31 @@
 (defn normalize-schema
   "Normalizes a schema that may be in lite syntax to standard Malli.
    - Plain maps become [:map [:k1 v1] [:k2 v2] ...] with values recursively normalized
-   - Vectors, keywords, and nil pass through unchanged
+   - Vectors are recursed into so nested lite maps inside [:vector {...}] etc. are normalized
+   - Keywords and nil pass through unchanged
    Examples:
      {:subtotal :double}             → [:map [:subtotal :double]]
      {:address {:street :string}}    → [:map [:address [:map [:street :string]]]]
+     [:vector {:x :int :y :string}]  → [:vector [:map [:x :int] [:y :string]]]
      [:map [:x :int]]                → [:map [:x :int]]
      :int                            → :int"
   [schema]
   (cond
     (nil? schema) nil
     (map? schema) (into [:map] (map (fn [[k v]] [k (normalize-schema v)])) schema)
+    (vector? schema) (mapv (fn [element]
+                             (if (and (vector? element)
+                                      (keyword? (first element)))
+                               ;; This is a [:key type] entry — normalize the type
+                               (if (= 2 (count element))
+                                 [(first element) (normalize-schema (second element))]
+                                 ;; 3-element entry: [:key opts type]
+                                 (if (= 3 (count element))
+                                   [(first element) (second element) (normalize-schema (nth element 2))]
+                                   element))
+                               ;; Non-entry element (type tag, property map, or nested schema)
+                               (normalize-schema element)))
+                           schema)
     :else schema))
 
 (defn normalize-output-schema
