@@ -104,15 +104,25 @@
 (defn- get-output-keys-for-transition
   "Gets output keys for a specific transition of a cell.
    For vector output schema, returns all keys for any transition.
-   For map output schema, returns keys for that specific transition."
+   For map output schema, returns keys for that specific transition.
+   When the exact transition key isn't found (e.g., parent uses :approve but composed
+   cell uses :success/:failure), falls back to the union of all transitions' keys."
   [cell-id transition]
   (let [cell   (cell/get-cell! cell-id)
         output (get-in cell [:schema :output])]
     (cond
       (nil? output)    nil
       (vector? output) (get-map-keys output)
-      (map? output)    (when-let [schema (get output transition)]
-                         (get-map-keys schema)))))
+      (map? output)    (if-let [schema (get output transition)]
+                         (get-map-keys schema)
+                         ;; Transition not found — fall back to union of all output keys.
+                         ;; This handles composed cells where the parent workflow's edge labels
+                         ;; (:approve, :review) don't match the composed cell's transitions
+                         ;; (:success, :failure) — the dispatch predicates handle the mapping.
+                         (reduce (fn [acc [_ schema]]
+                                   (into acc (get-map-keys schema)))
+                                 #{}
+                                 output)))))
 
 (defn- get-all-output-keys
   "Gets the union of all output keys across all transitions.
