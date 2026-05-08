@@ -33,6 +33,67 @@
     (let [resp (mw/html-response {:other "data"})]
       (is (= 500 (:status resp))))))
 
+;; ===== 1b. ring-response =====
+
+(deftest ring-response-body-test
+  (testing "ring-response uses :body / :status / :headers from the workflow"
+    (let [resp (mw/ring-response {:status 201
+                                  :headers {"Content-Type" "application/json"
+                                            "X-Trace-Id"   "abc"}
+                                  :body    "{\"ok\":true}"})]
+      (is (= 201 (:status resp)))
+      (is (= "{\"ok\":true}" (:body resp)))
+      (is (= "application/json" (get-in resp [:headers "Content-Type"])))
+      (is (= "abc" (get-in resp [:headers "X-Trace-Id"]))))))
+
+(deftest ring-response-defaults-test
+  (testing "ring-response defaults :status to 200 and :headers to {}"
+    (let [resp (mw/ring-response {:body "ok"})]
+      (is (= 200 (:status resp)))
+      (is (= "ok" (:body resp)))
+      (is (= {} (:headers resp))))))
+
+(deftest ring-response-html-fallback-test
+  (testing "ring-response falls back to :html with text/html when no :body"
+    (let [resp (mw/ring-response {:html "<h1>Hi</h1>"})]
+      (is (= 200 (:status resp)))
+      (is (= "<h1>Hi</h1>" (:body resp)))
+      (is (= "text/html; charset=utf-8" (get-in resp [:headers "Content-Type"])))))
+
+  (testing "ring-response :html honours per-request :status and merges :headers"
+    (let [resp (mw/ring-response {:html    "<h1>Gone</h1>"
+                                  :status  410
+                                  :headers {"X-Reason" "tombstone"}})]
+      (is (= 410 (:status resp)))
+      (is (= "tombstone" (get-in resp [:headers "X-Reason"])))
+      (is (= "text/html; charset=utf-8" (get-in resp [:headers "Content-Type"]))))))
+
+(deftest ring-response-missing-test
+  (testing "ring-response returns 500 when neither :body nor :html is present"
+    (let [resp (mw/ring-response {:other "data"})]
+      (is (= 500 (:status resp))))))
+
+(deftest workflow-handler-with-ring-response-test
+  (testing "workflow-handler + ring-response wires JSON through end-to-end"
+    (defmethod cell/cell-spec :mw-test/json [_]
+      {:id      :mw-test/json
+       :handler (fn [_ _]
+                  {:status  200
+                   :headers {"Content-Type" "application/json"}
+                   :body    "{\"ok\":true}"})
+       :schema  {:input  [:map]
+                 :output [:map [:body :string] [:status :int] [:headers :map]]}})
+    (let [compiled (myc/pre-compile
+                    {:cells {:start :mw-test/json}
+                     :edges {:start :end}})
+          handler  (mw/workflow-handler compiled
+                     {:resources {}
+                      :output-fn mw/ring-response})
+          resp     (handler {:uri "/api/thing"})]
+      (is (= 200 (:status resp)))
+      (is (= "application/json" (get-in resp [:headers "Content-Type"])))
+      (is (= "{\"ok\":true}" (:body resp))))))
+
 ;; ===== 2. workflow-handler basic =====
 
 (deftest workflow-handler-basic-test
