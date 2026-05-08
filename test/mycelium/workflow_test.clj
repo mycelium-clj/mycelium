@@ -517,6 +517,20 @@
            {:cells {:start :test/cell-a}
             :pipeline [:start :nonexistent]})))))
 
+(deftest pipeline-non-start-first-element-throws-test
+  (testing "Pipeline whose first element is not :start throws an actionable error"
+    (register-cells!)
+    (is (thrown-with-msg? Exception #"begin with a cell named :start"
+          (wf/compile-workflow
+           {:cells {:probe  :test/cell-a
+                    :render :test/cell-b}
+            :pipeline [:probe :render]})))
+    (is (thrown-with-msg? Exception #":probe"
+          (wf/compile-workflow
+           {:cells {:probe  :test/cell-a
+                    :render :test/cell-b}
+            :pipeline [:probe :render]})))))
+
 ;; ===== Parameterized cells =====
 
 (deftest parameterized-cell-compiles-test

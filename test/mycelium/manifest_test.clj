@@ -404,6 +404,23 @@
       (is (thrown-with-msg? Exception #"at least 1"
             (manifest/validate-manifest m))))))
 
+(deftest pipeline-non-start-first-element-throws-test
+  (testing "Pipeline whose first element is not :start throws an actionable error"
+    (let [m {:id :test/pipeline-bad-entry
+             :pipeline [:probe :render]
+             :cells {:probe  {:id :test/pn-probe
+                              :doc "Probe cell"
+                              :schema {:input [:map] :output [:map [:x :int]]}
+                              :on-error nil}
+                     :render {:id :test/pn-render
+                              :doc "Render cell"
+                              :schema {:input [:map [:x :int]] :output [:map [:html :string]]}
+                              :on-error nil}}}]
+      (is (thrown-with-msg? Exception #"begin with a cell named :start"
+            (manifest/validate-manifest m)))
+      (is (thrown-with-msg? Exception #"\:probe"
+            (manifest/validate-manifest m))))))
+
 ;; ===== Parameterized cells in manifest =====
 
 (deftest manifest-parameterized-cell-validates-test
