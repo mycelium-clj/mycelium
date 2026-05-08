@@ -355,7 +355,13 @@
 
 (defn- expand-pipeline
   "Expands a :pipeline vector into :edges and :dispatches for programmatic workflows.
-   Pipeline is mutually exclusive with :edges, :dispatches, and :joins."
+   Pipeline is mutually exclusive with :edges, :dispatches, and :joins.
+
+   The first element of :pipeline must be the cell named :start. The
+   reachability validator BFS-roots at :start, so any other entry name
+   leaves every cell in the workflow reported as unreachable. We catch
+   that misuse here with an actionable error rather than letting it
+   surface as `Unreachable cells: #{...}` later."
   [{:keys [pipeline cells edges dispatches joins] :as workflow}]
   (if-not pipeline
     workflow
@@ -368,6 +374,15 @@
         (throw (ex-info ":pipeline is mutually exclusive with :joins" {})))
       (when (empty? pipeline)
         (throw (ex-info ":pipeline must have at least 1 element" {})))
+      (when (not= :start (first pipeline))
+        (throw (ex-info (str "Pipeline must begin with a cell named :start, got "
+                             (first pipeline) ". Reachability is BFS-rooted at "
+                             ":start; any other entry name is reported as "
+                             "unreachable. Rename the first cell in :cells from "
+                             (first pipeline) " to :start, or use :edges + "
+                             ":dispatches directly if you need a custom entry.")
+                        {:pipeline   pipeline
+                         :first-cell (first pipeline)})))
       (let [cell-names (set (keys cells))]
         (doseq [name pipeline]
           (when-not (contains? cell-names name)

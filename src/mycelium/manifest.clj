@@ -61,6 +61,16 @@
       (when (empty? pipeline)
         (throw (ex-info ":pipeline must have at least 1 element"
                         {:id (:id manifest)})))
+      (when (not= :start (first pipeline))
+        (throw (ex-info (str "Pipeline must begin with a cell named :start, got "
+                             (first pipeline) ". Reachability is BFS-rooted at "
+                             ":start; any other entry name is reported as "
+                             "unreachable. Rename the first cell in :cells from "
+                             (first pipeline) " to :start, or use :edges + "
+                             ":dispatches directly if you need a custom entry.")
+                        {:id         (:id manifest)
+                         :pipeline   pipeline
+                         :first-cell (first pipeline)})))
       (let [cell-names (set (keys cells))]
         (doseq [cell-name pipeline]
           (when-not (contains? cell-names cell-name)
