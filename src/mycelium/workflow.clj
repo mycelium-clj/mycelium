@@ -1072,7 +1072,7 @@
 
 (def ^:private preserved-mycelium-keys
   "Mycelium keys that survive key propagation (stripped from input, re-attached after merge)."
-  #{:mycelium/warnings})
+  #{:mycelium/warnings :mycelium/trace})
 
 (defn- strip-mycelium-keys
   "Removes :mycelium/* keys from a data map for key propagation.
