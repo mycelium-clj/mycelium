@@ -15,6 +15,35 @@
      :headers {"Content-Type" "text/plain"}
      :body    "Workflow produced no :html key"}))
 
+(defn ring-response
+  "Output adapter for workflows that produce arbitrary HTTP responses
+  (JSON, redirects, file streams, etc.) rather than only HTML.
+
+  The terminal render cell returns :status / :headers / :body keys
+  on the accumulated workflow data; this helper assembles those into
+  a Ring response, defaulting :status to 200 and :headers to {}.
+
+  Falls back to :html extraction (matching `html-response`) so a single
+  workflow can mix HTML pages and JSON endpoints without per-route
+  output-fn juggling."
+  [result]
+  (cond
+    (contains? result :body)
+    {:status  (:status  result 200)
+     :headers (:headers result {})
+     :body    (:body    result)}
+
+    (contains? result :html)
+    {:status  (:status  result 200)
+     :headers (merge {"Content-Type" "text/html; charset=utf-8"}
+                     (:headers result {}))
+     :body    (:html result)}
+
+    :else
+    {:status  500
+     :headers {"Content-Type" "text/plain"}
+     :body    "Workflow produced no :body or :html"}))
+
 (defn- run-compiled
   "Runs a pre-compiled workflow. Inlined to avoid cyclic dependency on mycelium.core."
   [{:keys [compiled-fsm input-schema-raw input-schema-compiled]} resources initial-data]
