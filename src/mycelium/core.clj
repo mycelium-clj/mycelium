@@ -3,11 +3,13 @@
    Re-exports key functions from internal namespaces."
   (:require [mycelium.cell :as cell]
             [mycelium.dev :as dev]
+            [mycelium.schema :as schema]
             [mycelium.workflow :as workflow]
             [mycelium.compose :as compose]
             [mycelium.manifest :as manifest]
             [mycelium.middleware :as mw]
             [mycelium.system :as sys]
+            [clojure.set :as set]
             [malli.core :as m]
             [maestro.core :as fsm]
             [promesa.core :as p]))
@@ -185,6 +187,77 @@
    (run-workflow-async workflow-def resources initial-data {}))
   ([workflow-def resources initial-data opts]
    (run-compiled-async (pre-compile workflow-def opts) resources initial-data)))
+
+;; --- Direct cell invocation ---
+
+(defn invoke-cell
+  "Invoke a single registered cell directly, outside of a workflow.
+
+  Useful for read-shaped routes that orchestrate one or two cells, for
+  REPL exploration, and for tests that want to exercise a cell in
+  isolation without standing up a workflow.
+
+  Validates by default:
+    1. The cell exists in the registry.
+    2. Every key in the cell's :requires vector is present in resources.
+    3. data conforms to the cell's :input schema (if declared).
+    4. The handler's return value conforms to the cell's :output schema
+       (if declared). Per-transition output schemas are matched against
+       the returned :mycelium/transition or against any branch when
+       transition is unspecified.
+
+  Returns the handler's result on success.
+  Throws ex-info on validation failure with a `:type` key naming the
+  failure mode:
+
+    :mycelium.invoke-cell/cell-not-found
+    :mycelium.invoke-cell/missing-resources
+    :mycelium.invoke-cell/input-error
+    :mycelium.invoke-cell/output-error
+
+  opts:
+    :validate — :strict (default) runs all checks above.
+                :off skips :requires + schema checks; only the
+                cell-not-found check still fires (since the lookup is
+                needed to find the handler).
+
+  Naming follows the rest of the Mycelium API (pre-compile, dev/test-cell)
+  which uses plain `:validate` with keyword values rather than `:validate?`."
+  ([cell-id resources data]
+   (invoke-cell cell-id resources data {}))
+  ([cell-id resources data {:keys [validate] :or {validate :strict}}]
+   (let [cell (or (cell/get-cell cell-id)
+                  (throw (ex-info (str "Cell not found in registry: " cell-id)
+                                  {:type     :mycelium.invoke-cell/cell-not-found
+                                   :cell-id  cell-id})))]
+     (when (= :strict validate)
+       ;; :requires check
+       (when-let [reqs (seq (:requires cell))]
+         (let [provided (set (keys (or resources {})))
+               missing  (set/difference (set reqs) provided)]
+           (when (seq missing)
+             (throw (ex-info (str "Cell " cell-id
+                                  " requires resources " (vec reqs)
+                                  " but missing: " (vec missing)
+                                  " (got: " (vec provided) ")")
+                             {:type     :mycelium.invoke-cell/missing-resources
+                              :cell-id  cell-id
+                              :requires (vec reqs)
+                              :missing  (vec missing)
+                              :provided (vec provided)})))))
+       ;; :input check
+       (when-let [input-error (schema/validate-input cell data)]
+         (throw (ex-info (str "Cell " cell-id " input failed schema validation")
+                         (assoc input-error
+                                :type :mycelium.invoke-cell/input-error)))))
+     (let [result ((:handler cell) resources data)]
+       (when (= :strict validate)
+         (when-let [output-error (schema/validate-output
+                                   cell result (:mycelium/transition result))]
+           (throw (ex-info (str "Cell " cell-id " output failed schema validation")
+                           (assoc output-error
+                                  :type :mycelium.invoke-cell/output-error)))))
+       result))))
 
 ;; --- Middleware ---
 
