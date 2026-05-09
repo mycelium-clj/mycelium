@@ -103,10 +103,10 @@
       (is (some? thrown))
       (is (= :mycelium.invoke-cell/output-error (:type data))))))
 
-;; ===== :validate? :off =====
+;; ===== :validate :off =====
 
 (deftest invoke-cell-validate-off-skips-checks-test
-  (testing ":validate? :off skips :requires + input + output schema checks"
+  (testing ":validate :off skips :requires + input + output schema checks"
     (myc/defcell :ic-test/strict
       {:doc      "Strict cell."
        :requires [:db]
@@ -116,7 +116,82 @@
     ;; No :db, bad :n type, output adds an undeclared key.
     ;; All would throw under :strict; passes under :off.
     (is (= {:n "string" :extra "fine because no validation"}
-           (myc/invoke-cell :ic-test/strict {} {:n "string"} {:validate? :off})))))
+           (myc/invoke-cell :ic-test/strict {} {:n "string"} {:validate :off})))))
+
+;; ===== handler returns nil — Mycelium contract violation =====
+
+(deftest invoke-cell-surfaces-nil-return-test
+  (testing "a handler that returns nil violates Mycelium's never-return-nil rule;
+            the output schema check makes that visible at the call site"
+    (myc/defcell :ic-test/buggy-nil
+      {:doc    "Forgot the return value."
+       :input  [:map]
+       :output [:map [:result :int]]}
+      (fn [_ _] nil))
+    (let [thrown (try (myc/invoke-cell :ic-test/buggy-nil {} {})
+                      (catch clojure.lang.ExceptionInfo e e))
+          data   (ex-data thrown)]
+      (is (some? thrown))
+      (is (= :mycelium.invoke-cell/output-error (:type data))))))
+
+(deftest invoke-cell-allows-nil-when-schema-permits-test
+  (testing "if the cell intentionally has no :output schema, nil propagates
+            untouched (caller takes responsibility)"
+    (myc/defcell :ic-test/no-schema-nil
+      {:doc "No :output schema, returns nil."}
+      (fn [_ _] nil))
+    (is (nil? (myc/invoke-cell :ic-test/no-schema-nil {} {})))))
+
+;; ===== per-transition output =====
+
+(deftest invoke-cell-validates-against-active-transition-test
+  (testing "per-transition output schemas validate against the returned
+            :mycelium/transition; mismatching shapes still throw"
+    (myc/defcell :ic-test/branching
+      {:doc    "Returns either an :ok or :failed shape."
+       :input  [:map [:want [:enum :ok :failed]]]
+       :output {:ok     [:map [:result :int]]
+                :failed [:map [:error :string]]}}
+      (fn [_ {:keys [want]}]
+        (case want
+          :ok     {:mycelium/transition :ok     :result 42}
+          :failed {:mycelium/transition :failed :error  "nope"})))
+    (testing "the :ok branch validates against [:map [:result :int]]"
+      (is (= 42 (:result (myc/invoke-cell :ic-test/branching {} {:want :ok})))))
+    (testing "the :failed branch validates against [:map [:error :string]]"
+      (is (= "nope" (:error (myc/invoke-cell :ic-test/branching {} {:want :failed})))))
+    (testing "violating the active transition's schema throws"
+      (myc/defcell :ic-test/branching-bad
+        {:doc    "Returns :ok transition but the wrong shape."
+         :input  [:map]
+         :output {:ok [:map [:result :int]]}}
+        (fn [_ _] {:mycelium/transition :ok :result "not-an-int"}))
+      (let [thrown (try (myc/invoke-cell :ic-test/branching-bad {} {})
+                        (catch clojure.lang.ExceptionInfo e e))]
+        (is (= :mycelium.invoke-cell/output-error
+               (:type (ex-data thrown))))))))
+
+;; ===== nil resources =====
+
+(deftest invoke-cell-tolerates-nil-resources-when-no-requires-test
+  (testing "passing nil for resources is allowed when the cell declares no :requires"
+    (myc/defcell :ic-test/no-resources
+      {:doc "Doesn't touch resources."
+       :input [:map] :output [:map [:n :int]]}
+      (fn [_ _] {:n 1}))
+    (is (= {:n 1} (myc/invoke-cell :ic-test/no-resources nil {})))))
+
+(deftest invoke-cell-throws-on-nil-resources-when-requires-set-test
+  (testing "passing nil resources to a cell with :requires throws missing-resources"
+    (myc/defcell :ic-test/needs-something
+      {:doc "Wants :db." :requires [:db]}
+      (fn [_ _] {}))
+    (let [thrown (try (myc/invoke-cell :ic-test/needs-something nil {})
+                      (catch clojure.lang.ExceptionInfo e e))
+          data   (ex-data thrown)]
+      (is (= :mycelium.invoke-cell/missing-resources (:type data)))
+      (is (= [:db] (:missing data)))
+      (is (= []    (:provided data))))))
 
 ;; ===== cell-not-found =====
 

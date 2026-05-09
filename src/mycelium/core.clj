@@ -216,36 +216,42 @@
     :mycelium.invoke-cell/output-error
 
   opts:
-    :validate? — :strict (default) runs all checks above.
-                 :off skips schema + :requires checks; only the
-                 cell-not-found check still fires (since the lookup is
-                 needed to find the handler)."
+    :validate — :strict (default) runs all checks above.
+                :off skips :requires + schema checks; only the
+                cell-not-found check still fires (since the lookup is
+                needed to find the handler).
+
+  Naming follows the rest of the Mycelium API (pre-compile, dev/test-cell)
+  which uses plain `:validate` with keyword values rather than `:validate?`."
   ([cell-id resources data]
    (invoke-cell cell-id resources data {}))
-  ([cell-id resources data {:keys [validate?] :or {validate? :strict}}]
+  ([cell-id resources data {:keys [validate] :or {validate :strict}}]
    (let [cell (or (cell/get-cell cell-id)
                   (throw (ex-info (str "Cell not found in registry: " cell-id)
                                   {:type     :mycelium.invoke-cell/cell-not-found
                                    :cell-id  cell-id})))]
-     (when (= :strict validate?)
+     (when (= :strict validate)
        ;; :requires check
        (when-let [reqs (seq (:requires cell))]
-         (let [missing (set/difference (set reqs) (set (keys (or resources {}))))]
+         (let [provided (set (keys (or resources {})))
+               missing  (set/difference (set reqs) provided)]
            (when (seq missing)
              (throw (ex-info (str "Cell " cell-id
                                   " requires resources " (vec reqs)
-                                  " but missing: " (vec missing))
+                                  " but missing: " (vec missing)
+                                  " (got: " (vec provided) ")")
                              {:type     :mycelium.invoke-cell/missing-resources
                               :cell-id  cell-id
                               :requires (vec reqs)
-                              :missing  (vec missing)})))))
+                              :missing  (vec missing)
+                              :provided (vec provided)})))))
        ;; :input check
        (when-let [input-error (schema/validate-input cell data)]
          (throw (ex-info (str "Cell " cell-id " input failed schema validation")
                          (assoc input-error
                                 :type :mycelium.invoke-cell/input-error)))))
      (let [result ((:handler cell) resources data)]
-       (when (= :strict validate?)
+       (when (= :strict validate)
          (when-let [output-error (schema/validate-output
                                    cell result (:mycelium/transition result))]
            (throw (ex-info (str "Cell " cell-id " output failed schema validation")
