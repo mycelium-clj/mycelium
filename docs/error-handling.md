@@ -421,10 +421,11 @@ Use per-transition output schemas to validate both success and failure paths:
 
 ```clojure
 :schema {:input  [:map [:card :string] [:total :double]]
-         :output {:approved [:map [:payment-status [:= :approved]]
-                              [:transaction-id :string]]
-                  :declined [:map [:payment-status [:= :declined]]
-                              [:decline-reason :string]]}}
+         :output [:per-transition
+                  {:approved [:map [:payment-status [:= :approved]]
+                                   [:transaction-id :string]]
+                   :declined [:map [:payment-status [:= :declined]]
+                                   [:decline-reason :string]]}]}
 ```
 
 Each branch gets its own schema validation — a declined payment must include `:decline-reason`.

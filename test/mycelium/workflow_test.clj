@@ -230,8 +230,8 @@
                   (assoc data :profile {:name "Alice"})
                   (assoc data :error-message "Not found")))
      :schema {:input [:map [:id :string]]
-              :output {:found     [:map [:profile [:map [:name :string]]]]
-                       :not-found [:map [:error-message :string]]}}})
+              :output [:per-transition {:found     [:map [:profile [:map [:name :string]]]]
+                       :not-found [:map [:error-message :string]]}]}})
   (defmethod cell/cell-spec :test/render-profile [_]
     {:id :test/render-profile
      :handler (fn [_ data] (assoc data :html "ok"))
@@ -569,3 +569,90 @@
                                   :step-b [[:done (constantly true)]]}})]
       (is (some? compiled)))))
 
+
+;; =====================================================================
+;; Schema chain validator: regressions from real apparat / federation use
+;; =====================================================================
+
+(deftest schema-chain-honors-optional-input-keys-test
+  (testing "An input key marked {:optional true} does NOT have to be
+            produced by an upstream cell — the chain validator
+            should pass."
+    (cell/defcell :test/produce
+      {:doc "Produces only :a"
+       :input  [:map]
+       :output [:map [:a :int]]}
+      (fn [_ _] {:a 1}))
+    (cell/defcell :test/consume
+      {:doc "Requires :a, optionally consumes :b"
+       :input  [:map
+                [:a :int]
+                [:b {:optional true} [:maybe :string]]]
+       :output [:map [:done :boolean]]}
+      (fn [_ _] {:done true}))
+    ;; Before fix: validator demanded :b from upstream and failed
+    ;; compile. After fix: optional :b is filtered out of the
+    ;; required-input-keys set.
+    (is (some? (wf/compile-workflow
+                 {:cells {:start :test/produce
+                          :step  :test/consume}
+                  :edges {:start :step
+                          :step  :end}})))))
+
+(deftest schema-chain-still-rejects-missing-required-input-test
+  (testing "Schema-chain validator still rejects a missing REQUIRED
+            input — the optional-key fix doesn't accidentally
+            relax non-optional fields."
+    (cell/defcell :test/produce-a
+      {:doc "Produces only :a"
+       :input  [:map]
+       :output [:map [:a :int]]}
+      (fn [_ _] {:a 1}))
+    (cell/defcell :test/needs-b
+      {:doc "Needs both :a and required :b"
+       :input  [:map [:a :int] [:b :string]]
+       :output [:map [:done :boolean]]}
+      (fn [_ _] {:done true}))
+    (is (thrown-with-msg? Exception #"Schema chain error"
+          (wf/compile-workflow
+            {:cells {:start :test/produce-a
+                     :step  :test/needs-b}
+             :edges {:start :step
+                     :step  :end}})))))
+
+(deftest lite-map-output-with-namespaced-keys-vector-values-test
+  (testing "A lite map output schema whose keys are namespaced and
+            whose values are vectors is NOT misclassified as
+            per-transition. Pre-fix, mycelium's implicit heuristic
+            (every value is a vector) would treat this as
+            per-transition; the explicit marker fixes that."
+    (cell/defcell :test/parse-body
+      {:doc "Parses an incoming request body"
+       :input  [:map [:http-request :map]]
+       :output {:inbox/body-bytes [:maybe :any]
+                :inbox/activity   [:maybe :map]
+                :inbox/error      [:maybe :string]
+                :inbox/status     [:maybe :int]}}
+      (fn [_ _] {:inbox/body-bytes nil
+                 :inbox/activity   nil
+                 :inbox/error      nil
+                 :inbox/status     nil}))
+    (cell/defcell :test/validate-envelope
+      {:doc "Validates parsed envelope"
+       :input  [:map
+                [:inbox/activity [:maybe :map]]
+                [:inbox/error    [:maybe :string]]
+                [:inbox/status   [:maybe :int]]]
+       :output [:map [:inbox/error  [:maybe :string]]
+                     [:inbox/status [:maybe :int]]]}
+      (fn [_ _] {:inbox/error nil :inbox/status nil}))
+    ;; Before fix: parse-body's output was misclassified as
+    ;; per-transition (because all values are vectors), so its
+    ;; output keys never reached validate-envelope's available-keys
+    ;; set, and compile failed with
+    ;; "requires keys #{:inbox/status :inbox/activity :inbox/error}
+    ;;  but only #{:http-request} available".
+    (is (some? (wf/compile-workflow
+                 {:cells {:start    :test/parse-body
+                          :validate :test/validate-envelope}
+                  :edges {:start :validate :validate :end}})))))

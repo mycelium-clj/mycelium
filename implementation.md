@@ -375,9 +375,11 @@ At compile time, validate:
 
 This is a critical safety mechanism. When cell A connects to cell B via an edge, the compiler verifies that A's output provides what B's input requires. Since the data map uses passthrough semantics (keys not in a cell's schema flow through untouched), the check is:
 
-> For every key in cell B's `:input` schema, that key must appear in either:
+> For every **required** key in cell B's `:input` schema, that key must appear in either:
 > (a) cell A's `:output` schema, or
 > (b) the accumulated outputs of all cells that can reach B through any path from `:start`
+
+Input keys marked `{:optional true}` are excluded from the required set — the chain validator will not fail a compile if an optional key is never produced upstream.
 
 This is a static reachability analysis over the graph. The compiler walks every path from `:start` to each cell, accumulates the output keys along the way, and checks that the cell's input requirements are satisfied.
 

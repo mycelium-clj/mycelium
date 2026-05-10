@@ -208,8 +208,8 @@
                   (assoc data :path (if (> (:x data) 10) :big :small)
                               :mycelium/halt true))
        :schema  {:input  [:map [:x :int]]
-                 :output {:big   [:map [:path [:= :big]]]
-                          :small [:map [:path [:= :small]]]}}})
+                 :output [:per-transition {:big   [:map [:path [:= :big]]]
+                          :small [:map [:path [:= :small]]]}]}})
     (defmethod cell/cell-spec :halt/big [_]
       {:id      :halt/big
        :handler (fn [_ data] (assoc data :result "big"))

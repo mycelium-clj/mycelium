@@ -22,16 +22,16 @@
     (is (thrown? Exception
           (v/validate-output-schema! [:not-real] "test")))))
 
-(deftest validate-output-schema-map-test
-  (testing "Map output schema validates each transition's schema"
+(deftest validate-output-schema-per-transition-test
+  (testing "Per-transition output schema validates each transition's schema"
     (is (nil? (v/validate-output-schema!
-               {:found [:map [:profile :map]]
-                :not-found [:map [:error :string]]}
+               [:per-transition {:found     [:map [:profile :map]]
+                                 :not-found [:map [:error :string]]}]
                "test")))
     (is (thrown-with-msg? Exception #"transition :bad"
           (v/validate-output-schema!
-           {:good [:map [:x :int]]
-            :bad  [:not-real]}
+           [:per-transition {:good [:map [:x :int]]
+                             :bad  [:not-real]}]
            "test")))))
 
 (deftest validate-output-schema-keyword-test

@@ -134,17 +134,24 @@ With key propagation (on by default), cells only need to return new keys — inp
 
 ```clojure
 ;; Good: the schema documents the domain
-:output {:approve [:map [:decision [:= :approve]]]
-         :reject  [:map [:decision [:= :reject]]]
-         :review  [:map [:decision [:= :review]]]}
+:output [:per-transition
+         {:approve [:map [:decision [:= :approve]]]
+          :reject  [:map [:decision [:= :reject]]]
+          :review  [:map [:decision [:= :review]]]}]
 
 ;; Weak: tells you nothing about valid values
 :output [:map [:decision :keyword]]
 ```
 
-**Use per-transition output schemas** when a cell branches. This lets the schema chain validator verify that each downstream path receives the right shape.
+**Use per-transition output schemas** when a cell branches. Wrap the per-transition map in `[:per-transition ...]` — a bare map is always interpreted as lite-map syntax. This lets the schema chain validator verify that each downstream path receives the right shape.
 
 **Use open schemas (`:map`) for cells that receive external input** (e.g., after halt/resume), since the schema chain can't track keys injected from outside.
+
+**Mark optional inputs with `{:optional true}`** when a cell can run without a key. The schema chain validator skips optional keys when computing required inputs, so the cell can sit downstream of paths that don't produce that key:
+
+```clojure
+:input [:map [:user-id :string] [:trace-id {:optional true} :string]]
+```
 
 ---
 

@@ -84,8 +84,8 @@
       {:id      :dt4/produce
        :handler (fn [_ data] (assoc data :value 42))
        :schema  {:input  [:map]
-                 :output {:success [:map [:value :int]]
-                          :default [:map [:value :int]]}}})
+                 :output [:per-transition {:success [:map [:value :int]]
+                          :default [:map [:value :int]]}]}})
     (defmethod cell/cell-spec :dt4/consume [_]
       {:id      :dt4/consume
        :handler (fn [_ data] (assoc data :doubled (* 2 (:value data))))

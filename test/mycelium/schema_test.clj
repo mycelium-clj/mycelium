@@ -158,8 +158,8 @@
       {:id          :test/per-trans
        :handler     (fn [_ data] data)
        :schema      {:input  [:map [:x :int]]
-                     :output {:found     [:map [:profile [:map [:name :string]]]]
-                              :not-found [:map [:error-message :string]]}}})
+                     :output [:per-transition {:found     [:map [:profile [:map [:name :string]]]]
+                              :not-found [:map [:error-message :string]]}]}})
     (let [cell (cell/get-cell! :test/per-trans)]
       (is (= [:map [:profile [:map [:name :string]]]]
              (schema/output-schema-for-transition cell :found)))
@@ -183,8 +183,8 @@
     {:id          :test/pt-cell
      :handler     (fn [_ data] data)
      :schema      {:input  [:map [:x :int]]
-                   :output {:success   [:map [:y :int]]
-                            :failure   [:map [:error-message :string]]}}}))
+                   :output [:per-transition {:success   [:map [:y :int]]
+                            :failure   [:map [:error-message :string]]}]}}))
 
 (deftest validate-output-per-transition-passes-test
   (testing "Per-transition schema passes correct data for given transition label"
@@ -370,10 +370,10 @@
           compiled    (schema/pre-compile-schemas state->cell)
           cell        (get compiled :test/pt-cell)
           output      (get-in cell [:schema :output])]
-      ;; Output should still be a map, but values should be compiled schemas
-      (is (map? output))
-      (is (m/schema? (get output :success)))
-      (is (m/schema? (get output :failure))))))
+      ;; Output should still be the per-transition wrapper, with values as compiled schemas
+      (is (= :per-transition (first output)))
+      (is (m/schema? (get-in output [1 :success])))
+      (is (m/schema? (get-in output [1 :failure]))))))
 
 (deftest pre-compile-schemas-validate-still-works-test
   (testing "validate-input/output still work with pre-compiled schemas"

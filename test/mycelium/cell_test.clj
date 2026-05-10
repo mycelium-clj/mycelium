@@ -102,11 +102,11 @@
       {:id          :test/map-out
        :handler     (fn [_ d] d)
        :schema      {:input  [:map [:x :int]]
-                     :output {:found     [:map [:profile :map]]
-                              :not-found [:map [:error-message :string]]}}})
-    (let [spec (cell/get-cell :test/map-out)]
-      (is (map? (get-in spec [:schema :output])))
-      (is (= #{:found :not-found} (set (keys (get-in spec [:schema :output]))))))))
+                     :output [:per-transition {:found     [:map [:profile :map]]
+                              :not-found [:map [:error-message :string]]}]}})
+    (let [output (get-in (cell/get-cell :test/map-out) [:schema :output])]
+      (is (= :per-transition (first output)))
+      (is (= #{:found :not-found} (set (keys (second output))))))))
 
 ;; ===== Per-transition output schema in set-cell-schema! =====
 
@@ -117,10 +117,10 @@
        :handler     (fn [_ d] d)})
     (cell/set-cell-schema! :test/set-map-out
                            {:input  [:map [:x :int]]
-                            :output {:found     [:map [:profile :map]]
-                                     :not-found [:map [:error :string]]}})
-    (let [spec (cell/get-cell :test/set-map-out)]
-      (is (map? (get-in spec [:schema :output]))))))
+                            :output [:per-transition {:found     [:map [:profile :map]]
+                                     :not-found [:map [:error :string]]}]})
+    (let [output (get-in (cell/get-cell :test/set-map-out) [:schema :output])]
+      (is (= :per-transition (first output))))))
 
 (deftest redefine-does-not-clear-overrides-test
   (testing "Re-defining via defmethod does NOT clear overrides (they persist until clear-registry!)"

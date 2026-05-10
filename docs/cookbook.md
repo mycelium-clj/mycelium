@@ -44,12 +44,13 @@ Problem-oriented patterns for common workflow tasks. Each recipe shows the probl
 
 The cell handler sets a key (`:fraud-status`). Dispatch predicates examine that key and pick the edge. Handlers compute data; dispatches decide the route.
 
-For per-transition output schemas, use a map instead of a single schema:
+For per-transition output schemas, wrap the schema map in `[:per-transition ...]`:
 
 ```clojure
 :schema {:input  [:map [:total :double]]
-         :output {:clean      [:map [:fraud-status [:= :ok]]]
-                  :suspicious [:map [:fraud-status [:= :flagged]]]}}
+         :output [:per-transition
+                  {:clean      [:map [:fraud-status [:= :ok]]]
+                   :suspicious [:map [:fraud-status [:= :flagged]]]}]}
 ```
 
 ---

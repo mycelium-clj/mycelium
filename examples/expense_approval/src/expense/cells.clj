@@ -23,9 +23,9 @@
                   :else
                   (assoc data :validation-status :valid))))
    :schema {:input  [:map [:amount [:maybe number?]] [:description :string]]
-            :output {:valid   [:map [:validation-status [:= :valid]]]
+            :output [:per-transition {:valid   [:map [:validation-status [:= :valid]]]
                      :invalid [:map [:validation-status [:= :invalid]]
-                                    [:validation-error :string]]}}})
+                                    [:validation-error :string]]}]}})
 
 ;; --- Categorize by amount ---
 

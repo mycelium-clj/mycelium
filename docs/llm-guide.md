@@ -132,8 +132,9 @@ When a cell branches, declare output per edge:
 ```clojure
 (cell/defcell :app/check
   {:input  [:map [:value :int]]
-   :output {:pass [:map [:status [:= :ok]]]
-            :fail [:map [:status [:= :error]] [:reason :string]]}}
+   :output [:per-transition
+            {:pass [:map [:status [:= :ok]]]
+             :fail [:map [:status [:= :error]] [:reason :string]]}]}
   (fn [_ data]
     (if (pos? (:value data))
       {:status :ok}

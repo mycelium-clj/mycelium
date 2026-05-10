@@ -106,8 +106,8 @@
            {:id       :test/lookup
             :doc      "Look up a thing"
             :schema   {:input  [:map [:id :string]]
-                       :output {:found     [:map [:profile [:map [:name :string]]]]
-                                :not-found [:map [:error-message :string]]}}
+                       :output [:per-transition {:found     [:map [:profile [:map [:name :string]]]]
+                                :not-found [:map [:error-message :string]]}]}
             :on-error nil
             :requires [:db]}
            :render
@@ -143,9 +143,10 @@
   (testing "manifest->workflow applies per-transition schema to cells"
     (let [workflow-def (manifest/manifest->workflow per-transition-manifest)]
       (is (map? workflow-def))
-      (let [cell (cell/get-cell :test/lookup)]
-        (is (map? (get-in cell [:schema :output])))
-        (is (= #{:found :not-found} (set (keys (get-in cell [:schema :output])))))))))
+      (let [cell   (cell/get-cell :test/lookup)
+            output (get-in cell [:schema :output])]
+        (is (= :per-transition (first output)))
+        (is (= #{:found :not-found} (set (keys (second output)))))))))
 
 ;; ===== Dispatch coverage validation =====
 
@@ -186,8 +187,8 @@
            {:id       :test/jm-start
             :doc      "Start cell for join workflow"
             :schema   {:input  [:map [:x :int]]
-                       :output {:success [:map [:user-id :string]]
-                                :failure [:map [:error :string]]}}
+                       :output [:per-transition {:success [:map [:user-id :string]]
+                                :failure [:map [:error :string]]}]}
             :on-error nil
             :requires []}
            :fetch-a

@@ -17,8 +17,8 @@
                   (Thread/sleep 200)
                   (assoc data :result "done"))
        :schema  {:input [:map [:x :int]]
-                 :output {:done    [:map [:result :string]]
-                          :timeout [:map [:mycelium/resilience-error :map]]}}})
+                 :output [:per-transition {:done    [:map [:result :string]]
+                          :timeout [:map [:mycelium/resilience-error :map]]}]}})
     (defmethod cell/cell-spec :res/handle-timeout [_]
       {:id      :res/handle-timeout
        :handler (fn [_ data] (assoc data :handled true))
@@ -43,8 +43,8 @@
       {:id      :res/fast
        :handler (fn [_ data] (assoc data :result "fast"))
        :schema  {:input  [:map [:x :int]]
-                 :output {:done    [:map [:result :string]]
-                          :timeout [:map [:mycelium/resilience-error :map]]}}})
+                 :output [:per-transition {:done    [:map [:result :string]]
+                          :timeout [:map [:mycelium/resilience-error :map]]}]}})
 
     (let [result (myc/run-workflow
                   {:cells {:start :res/fast}
@@ -65,8 +65,8 @@
                   (Thread/sleep 200)
                   (assoc data :result "done"))
        :schema  {:input  [:map [:x :int]]
-                 :output {:done    [:map [:result :string]]
-                          :timeout [:map [:mycelium/resilience-error :map]]}}})
+                 :output [:per-transition {:done    [:map [:result :string]]
+                          :timeout [:map [:mycelium/resilience-error :map]]}]}})
     (defmethod cell/cell-spec :res/handle-timeout2 [_]
       {:id      :res/handle-timeout2
        :handler (fn [_ data] (assoc data :handled true))
@@ -316,8 +316,8 @@
                     (Thread/sleep 500)
                     (callback (assoc data :result "done"))))
        :schema  {:input [:map [:x :int]]
-                 :output {:done    [:map [:result :string]]
-                          :timeout [:map [:mycelium/resilience-error :map]]}}})
+                 :output [:per-transition {:done    [:map [:result :string]]
+                          :timeout [:map [:mycelium/resilience-error :map]]}]}})
     (defmethod cell/cell-spec :res/async-timeout-handler [_]
       {:id      :res/async-timeout-handler
        :handler (fn [_ data] (assoc data :handled true))
@@ -347,8 +347,8 @@
                     (Thread/sleep 500)
                     (callback (assoc data :result "late"))))
        :schema  {:input [:map [:x :int]]
-                 :output {:done [:map [:result :string]]
-                          :failed [:map [:mycelium/resilience-error :map]]}}})
+                 :output [:per-transition {:done [:map [:result :string]]
+                          :failed [:map [:mycelium/resilience-error :map]]}]}})
     (defmethod cell/cell-spec :res/async-hang-fallback [_]
       {:id      :res/async-hang-fallback
        :handler (fn [_ data] (assoc data :handled true))

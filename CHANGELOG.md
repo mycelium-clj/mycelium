@@ -1,5 +1,49 @@
 # Changelog
 
+## Unreleased
+
+### Breaking: per-transition output schemas require explicit `[:per-transition ...]` wrapper
+
+Cells whose downstream edge selection depends on the cell's output
+declare a different schema per transition. Pre-1.0 the wrapper was
+implicit — a plain map whose values were all vectors was inferred
+to be per-transition. That heuristic silently misclassified lite
+map output schemas whose values happened to be vector schemas
+(e.g. `{:user/profile [:maybe :map]}` — every value is a vector,
+so it got treated as per-transition with transitions `:user/profile`).
+
+The wrapper is now mandatory:
+
+```clojure
+;; Before — implicit, ambiguous
+:output {:high [:map [:result [:= :high]]]
+         :low  [:map [:result [:= :low]]]}
+
+;; After — explicit
+:output [:per-transition {:high [:map [:result [:= :high]]]
+                          :low  [:map [:result [:= :low]]]}]
+```
+
+Bare map output schemas are now ALWAYS lite-map syntax, never
+per-transition. The migration error message includes the exact
+rewrite for each cell that needs updating. EDN manifest files
+follow the same form.
+
+### Fix: schema-chain validator honors `{:optional true}` on inputs
+
+A cell that declared `[:k {:optional true} <schema>]` in its input
+was previously rejected by `compile-workflow` unless every
+upstream cell on the cell's path produced `:k`. The validator now
+filters out optional keys when computing a cell's required inputs.
+
+```clojure
+;; This now compiles — :b is optional, upstream needn't produce it
+(cell/defcell :downstream
+  {:input [:map [:a :int] [:b {:optional true} [:maybe :string]]]
+   :output [:map [:done :boolean]]}
+  ...)
+```
+
 ## 2026-03-07
 
 ### Unified Error Inspection

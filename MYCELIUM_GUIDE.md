@@ -76,8 +76,9 @@ Cells with multiple outgoing edges can declare different output schemas per tran
 
 ```clojure
 :schema {:input  [:map [:id :string]]
-         :output {:found     [:map [:profile [:map [:name :string]]]]
-                  :not-found [:map [:error-message :string]]}}
+         :output [:per-transition
+                  {:found     [:map [:profile [:map [:name :string]]]]
+                   :not-found [:map [:error-message :string]]}]}
 ```
 
 The schema chain validator tracks keys per path independently.

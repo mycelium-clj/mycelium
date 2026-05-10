@@ -181,8 +181,9 @@ Cells with multiple outgoing edges can declare different output schemas for each
                     (assoc data :profile profile)
                     (assoc data :error-message "Not found")))
    :schema      {:input  [:map [:user-id :string]]
-                 :output {:found     [:map [:profile [:map [:name :string] [:email :string]]]]
-                          :not-found [:map [:error-message :string]]}}
+                 :output [:per-transition
+                          {:found     [:map [:profile [:map [:name :string] [:email :string]]]]
+                           :not-found [:map [:error-message :string]]}]}
    :requires    [:db]})
 ```
 
@@ -192,12 +193,21 @@ In the workflow, per-transition schemas are validated based on which dispatch ma
 ;; Single schema (all transitions must satisfy it)
 :output [:map [:profile map?]]
 
-;; Per-transition schemas (each transition has its own contract)
-:output {:found     [:map [:profile [:map [:name :string] [:email :string]]]]
-         :not-found [:map [:error-message :string]]}
+;; Per-transition schemas (each transition has its own contract).
+;; The [:per-transition ...] wrapper is required — a bare map is always lite-map syntax.
+:output [:per-transition
+         {:found     [:map [:profile [:map [:name :string] [:email :string]]]]
+          :not-found [:map [:error-message :string]]}]
 ```
 
 The schema chain validator tracks which keys are available on each path independently, so a downstream cell on the `:found` path can require `:profile` without the `:not-found` path needing to produce it.
+
+Input keys marked `{:optional true}` are excluded from the schema chain's required-keys check — an optional key may or may not be produced upstream, and the validator won't fail compilation if it isn't:
+
+```clojure
+;; :b is optional — this cell can sit anywhere downstream, even if no upstream cell produces :b
+:input [:map [:a :int] [:b {:optional true} [:maybe :string]]]
+```
 
 ### Resources
 
@@ -211,8 +221,9 @@ External dependencies are injected, never acquired by cells:
                     (assoc data :profile profile)
                     (assoc data :error-message "Not found")))
    :schema      {:input  [:map [:user-id :string]]
-                 :output {:found     [:map [:profile [:map [:name :string] [:email :string]]]]
-                          :not-found [:map [:error-message :string]]}}
+                 :output [:per-transition
+                          {:found     [:map [:profile [:map [:name :string] [:email :string]]]]
+                           :not-found [:map [:error-message :string]]}]}
    :requires    [:db]})
 
 ;; Resources are passed at run time
@@ -731,8 +742,8 @@ Child workflows produce `:success` or `:failure` based on whether `:mycelium/err
 ```clojure
 ;; The child workflow's last cell declares [:map [:credit-score :int] [:risk-level :keyword]]
 ;; workflow->cell infers this and produces a per-transition output schema:
-;;   {:success [:map [:credit-score :int] [:risk-level :keyword]]
-;;    :failure [:map [:mycelium/error :any]]}
+;;   [:per-transition {:success [:map [:credit-score :int] [:risk-level :keyword]]
+;;                     :failure [:map [:mycelium/error :any]]}]
 ```
 
 If you pass a concrete `[:map ...]` vector as `:output` in the schema argument, it takes precedence over inference.

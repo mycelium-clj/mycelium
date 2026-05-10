@@ -29,9 +29,10 @@
   (cond
     ;; Unconditional edge to :end
     (= :end edge-def)
-    (cond
-      (vector? output) (get-map-entries output)
-      (map? output)    (mapcat (fn [[_ s]] (or (get-map-entries s) [])) output))
+    (if (schema/per-transition? output)
+      (mapcat (fn [[_ s]] (or (get-map-entries s) []))
+              (schema/transitions-map output))
+      (get-map-entries output))
 
     ;; Map edges — collect entries from transitions routing to :end
     (map? edge-def)
@@ -39,11 +40,12 @@
                                   (when (= :end target) transition))
                                 edge-def)]
       (when (seq end-transitions)
-        (cond
-          (vector? output) (get-map-entries output)
-          (map? output)    (mapcat (fn [t]
-                                     (or (some-> (get output t) get-map-entries) []))
-                                   end-transitions))))))
+        (if (schema/per-transition? output)
+          (let [transitions (schema/transitions-map output)]
+            (mapcat (fn [t]
+                      (or (some-> (get transitions t) get-map-entries) []))
+                    end-transitions))
+          (get-map-entries output))))))
 
 (defn- collect-end-reaching-output-entries
   "Walks workflow edges to find cells routing to :end and collects their output entries.
@@ -58,22 +60,33 @@
        vec))
 
 (defn- infer-workflow-output-schema
-  "Infers a per-transition output schema for a composed cell.
+  "Infers a per-transition output schema for a composed cell, wrapped
+   in the explicit `[:per-transition {...}]` form.
+
    :success path gets the union of output keys from cells routing to :end.
    :failure path gets [:map [:mycelium/error :any]].
-   Only infers when the caller's :output schema is bare :map keyword.
-   If the caller provides a proper [:map ...] vector, uses that directly."
+
+   When the caller passes a proper [:map ...] vector, that becomes the
+   :success schema. When the caller's schema is the bare :map keyword,
+   we infer :success from the child workflow's end-reaching cells, and
+   fall back to bare :map when there's nothing to infer."
   [workflow schema]
   (let [output (:output schema)]
-    (if (and (not (keyword? output)) (vector? output))
+    (cond
+      ;; Caller already passed an explicit per-transition wrapper — use it as-is.
+      (schema/per-transition? output)
+      output
+
       ;; Caller provided a real schema — use it as :success, add :failure
-      {:success output
-       :failure [:map [:mycelium/error :any]]}
-      ;; Infer from child workflow
+      (and (not (keyword? output)) (vector? output))
+      [:per-transition {:success output
+                        :failure [:map [:mycelium/error :any]]}]
+
+      :else
       (let [entries (collect-end-reaching-output-entries (:edges workflow) (:cells workflow))]
         (if (seq entries)
-          {:success (into [:map] entries)
-           :failure [:map [:mycelium/error :any]]}
+          [:per-transition {:success (into [:map] entries)
+                            :failure [:map [:mycelium/error :any]]}]
           ;; Fall back to bare :map
           :map)))))
 

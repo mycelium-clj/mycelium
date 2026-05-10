@@ -152,12 +152,8 @@
                                  (if (or (= :inherit (:schema cell-def))
                                          (nil? (:schema cell-def)))
                                    [cell-name cell-def]
-                                   (let [edge-def    (get edges cell-name)
-                                         output      (get-in cell-def [:schema :output])
-                                         dispatched? (or (map? edge-def)
-                                                         (and (map? output)
-                                                              (seq output)
-                                                              (every? vector? (vals output))))
+                                   (let [output      (get-in cell-def [:schema :output])
+                                         dispatched? (schema/per-transition? output)
                                          normalized  (schema/normalize-cell-schema
                                                        (:schema cell-def) dispatched?)]
                                      [cell-name (assoc cell-def :schema normalized)]))))
@@ -243,23 +239,23 @@
 
 (defn- format-output-schema-section
   "Formats output schema section for the cell-brief prompt.
-   Handles both single-schema (vector) and per-edge (map) formats."
+   Handles both single-schema and explicit per-transition formats."
   [output-schema edge-labels]
-  (if (map? output-schema)
+  (if-let [transitions (schema/transitions-map output-schema)]
     (str "Output schemas (per edge):\n"
          (str/join "\n"
                    (map (fn [label]
-                          (str "  " (pr-str label) ": " (pr-str (get output-schema label))))
+                          (str "  " (pr-str label) ": " (pr-str (get transitions label))))
                         (sort edge-labels))))
     (str "Output schema:\n  " (pr-str output-schema))))
 
 (defn- generate-output-examples
-  "Generates output examples. For per-edge schema maps, generates one per edge."
+  "Generates output examples. For per-transition schemas, generates one per edge."
   [output-schema edge-labels]
-  (if (map? output-schema)
+  (if-let [transitions (schema/transitions-map output-schema)]
     (into {}
           (map (fn [label]
-                 [label (generate-example (get output-schema label))]))
+                 [label (generate-example (get transitions label))]))
           (sort edge-labels))
     (generate-example output-schema)))
 
@@ -278,7 +274,7 @@
         input-ex    (generate-example (:input schema))
         output-ex   (generate-output-examples (:output schema) edge-labels)
         output-section (format-output-schema-section (:output schema) edge-labels)
-        example-section (if (map? (:output schema))
+        example-section (if (schema/per-transition? (:output schema))
                           (str/join "\n\n"
                                     (map (fn [[label ex]]
                                            (str "Example output (" (pr-str label) "):\n  " (pr-str ex)))

@@ -310,17 +310,19 @@
           spec (compose/workflow->cell :comp/inferred child-wf
                                        {:input [:map [:a :int]]
                                         :output :map})]
-      ;; Output should be a per-transition map, not bare :map
-      (is (map? (get-in spec [:schema :output])))
-      ;; :success should contain the inferred keys
-      (let [success-schema (get-in spec [:schema :output :success])]
-        (is (vector? success-schema))
-        (is (= :map (first success-schema)))
-        ;; Should include :x-val
-        (let [key-names (set (map first (filter vector? (rest success-schema))))]
-          (is (contains? key-names :x-val))))
-      ;; :failure should exist
-      (is (some? (get-in spec [:schema :output :failure]))))))
+      ;; Output should be the explicit per-transition wrapper, not bare :map
+      (let [output      (get-in spec [:schema :output])
+            transitions (second output)]
+        (is (= :per-transition (first output)))
+        ;; :success should contain the inferred keys
+        (let [success-schema (get transitions :success)]
+          (is (vector? success-schema))
+          (is (= :map (first success-schema)))
+          ;; Should include :x-val
+          (let [key-names (set (map first (filter vector? (rest success-schema))))]
+            (is (contains? key-names :x-val))))
+        ;; :failure should exist
+        (is (some? (get transitions :failure)))))))
 
 (deftest inferred-output-enables-chain-validation-test
   (testing "Parent workflow chain validation passes without set-cell-schema! workaround"
@@ -371,4 +373,4 @@
                                        {:input [:map]
                                         :output [:map [:y :int]]})]
       ;; Output should use the caller's schema for :success
-      (is (= [:map [:y :int]] (get-in spec [:schema :output :success]))))))
+      (is (= [:map [:y :int]] (get-in (second (get-in spec [:schema :output])) [:success]))))))

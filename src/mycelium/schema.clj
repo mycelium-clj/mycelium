@@ -9,6 +9,54 @@
             [malli.transform :as mt]
             [maestro.core :as fsm]))
 
+;; ===== Per-transition output schema =====
+;;
+;; Cells whose downstream edge selection depends on the cell's
+;; OUTPUT (per-transition cells) can declare a different schema
+;; for each transition. The explicit form is:
+;;
+;;     :output [:per-transition {:ok     [:map [:result :string]]
+;;                               :failed [:map [:error  :string]]}]
+;;
+;; The marker is mandatory: a bare map output is ALWAYS lite-map
+;; syntax, never per-transition. Pre-1.0 mycelium inferred
+;; per-transition from "all values are vectors", which silently
+;; misclassified lite maps whose values happened to be vector
+;; schemas (e.g. `{:user/name [:maybe :string]}`). The explicit
+;; marker removes that ambiguity.
+
+(defn per-transition?
+  "True if `output` is an explicit per-transition output schema —
+  the vector form `[:per-transition {:transition-1 schema, ...}]`."
+  [output]
+  (and (vector? output)
+       (= 2 (count output))
+       (= :per-transition (first output))
+       (map? (second output))))
+
+(defn transitions-map
+  "Extracts the {:transition-1 schema, ...} map from an explicit
+  per-transition output schema. Returns nil when `output` isn't
+  in per-transition form."
+  [output]
+  (when (per-transition? output)
+    (second output)))
+
+(defn- looks-like-implicit-per-transition?
+  "Detects the OLD implicit per-transition form: a plain map whose
+  values are all vector schemas. Used only to produce a clear
+  migration error — the implicit form is no longer accepted."
+  [output]
+  (and (map? output)
+       (seq output)
+       (every? vector? (vals output))
+       ;; Sanity: per-transition keys are simple keywords (edge
+       ;; labels like :ok / :failed / :high / :low). If any key has
+       ;; a namespace, it's almost certainly a lite map of
+       ;; namespaced data keys whose values happen to be vectors
+       ;; like [:maybe :string].
+       (not-any? namespace (keys output))))
+
 ;; ===== Lite schema normalization =====
 
 (defn normalize-schema
@@ -42,17 +90,43 @@
     :else schema))
 
 (defn normalize-output-schema
-  "Normalizes an output schema, accounting for per-transition maps.
-   When `dispatched?` is true and the schema is a map, each value is normalized
-   individually (per-transition output). Otherwise the map is treated as lite syntax."
-  [schema dispatched?]
-  (cond
-    (nil? schema)    nil
-    (vector? schema) schema
-    (map? schema)    (if dispatched?
-                       (into {} (map (fn [[k v]] [k (normalize-schema v)])) schema)
-                       (normalize-schema schema))
-    :else            schema))
+  "Normalizes an output schema:
+    * `[:per-transition {tx schema, ...}]` — each transition's
+      schema is normalized in place; the wrapper is preserved.
+    * `[:map ...]` and other Malli vector schemas — pass through.
+    * `{:k schema, :k2 schema, ...}` — lite map syntax, normalized
+      to `[:map [:k schema] [:k2 schema] ...]`.
+
+  Rejects the pre-1.0 implicit per-transition shape (a plain map
+  whose values are all vectors and whose keys are unnamespaced)
+  with a migration error.
+
+  The `dispatched?` parameter is accepted for backwards
+  compatibility but is no longer consulted — per-transition is
+  determined entirely by the explicit `[:per-transition ...]`
+  wrapper."
+  ([schema] (normalize-output-schema schema false))
+  ([schema _dispatched?]
+   (cond
+     (nil? schema) nil
+
+     (per-transition? schema)
+     [:per-transition (into {} (map (fn [[k v]] [k (normalize-schema v)]))
+                            (transitions-map schema))]
+
+     (vector? schema) schema
+
+     (looks-like-implicit-per-transition? schema)
+     (throw (ex-info
+              (str "Implicit per-transition output schema is no longer "
+                   "supported. Wrap the transition map in [:per-transition ...]:\n"
+                   "  Old: :output " (pr-str schema) "\n"
+                   "  New: :output " (pr-str [:per-transition schema]))
+              {:schema schema}))
+
+     (map? schema) (normalize-schema schema)
+
+     :else schema)))
 
 (defn normalize-cell-schema
   "Normalizes a cell's :schema map, converting lite syntax to Malli.
@@ -167,15 +241,15 @@
 
 (defn output-schema-for-transition
   "Returns the output schema for a specific transition of a cell.
-   If output is nil → nil. If vector → same schema for all transitions.
-   If map → schema for that transition key (or nil if not found)."
+   nil output → nil. Explicit per-transition wrapper → the schema
+   for that transition (or nil if not found). Any other vector or
+   map → same schema for all transitions."
   [cell transition]
   (let [output (get-in cell [:schema :output])]
     (cond
-      (nil? output)    nil
-      (vector? output) output
-      (map? output)    (get output transition)
-      :else            output)))
+      (nil? output)            nil
+      (per-transition? output) (get (transitions-map output) transition)
+      :else                    output)))
 
 (defn validate-output
   "Validates data against the cell's output schema.
@@ -192,18 +266,18 @@
        ;; No output schema — always passes
        (nil? output) nil
 
-       ;; Per-transition output schema (map)
-       (map? output)
-       (if transition
-         ;; Validate against the specific transition's schema
-         (when-let [schema (get output transition)]
-           (when-let [explanation (m/explain schema data)]
-             (build-error-map (:id cell) :output explanation data)))
-         ;; No transition known — validate against all schemas, pass if any matches
-         (let [schemas (vals output)]
+       ;; Explicit per-transition output schema
+       (per-transition? output)
+       (let [transitions (transitions-map output)]
+         (if transition
+           ;; Validate against the specific transition's schema
+           (when-let [schema (get transitions transition)]
+             (when-let [explanation (m/explain schema data)]
+               (build-error-map (:id cell) :output explanation data)))
+           ;; No transition known — validate against all schemas, pass if any matches
            (when (every? (fn [schema]
                            (some? (m/explain schema data)))
-                         schemas)
+                         (vals transitions))
              (let [msg (str "Data does not match any output schema for " (:id cell))]
                {:cell-id (:id cell)
                 :phase   :output
@@ -250,27 +324,28 @@
        (nil? output)
        {:data data}
 
-       (map? output)
-       (if transition
-         (if-let [schema (get output transition)]
-           (let [coerced (m/decode schema data number-coercion-transformer)]
-             (if-let [explanation (m/explain schema coerced)]
-               {:error (build-error-map (:id cell) :output explanation data)}
-               {:data coerced}))
-           {:data data})
-         ;; No transition — try each schema, use first that matches after coercion
-         (let [results (for [[_label schema] output]
-                         (let [coerced (m/decode schema data number-coercion-transformer)]
-                           (when-not (m/explain schema coerced)
-                             coerced)))]
-           (if-let [coerced (first (filter some? results))]
-             {:data coerced}
-             (let [msg (str "Data does not match any output schema for " (:id cell))]
-               {:error {:cell-id (:id cell)
-                        :phase   :output
-                        :message msg
-                        :errors  msg
-                        :data    (strip-mycelium-keys data)}}))))
+       (per-transition? output)
+       (let [transitions (transitions-map output)]
+         (if transition
+           (if-let [schema (get transitions transition)]
+             (let [coerced (m/decode schema data number-coercion-transformer)]
+               (if-let [explanation (m/explain schema coerced)]
+                 {:error (build-error-map (:id cell) :output explanation data)}
+                 {:data coerced}))
+             {:data data})
+           ;; No transition — try each schema, use first that matches after coercion
+           (let [results (for [[_label schema] transitions]
+                           (let [coerced (m/decode schema data number-coercion-transformer)]
+                             (when-not (m/explain schema coerced)
+                               coerced)))]
+             (if-let [coerced (first (filter some? results))]
+               {:data coerced}
+               (let [msg (str "Data does not match any output schema for " (:id cell))]
+                 {:error {:cell-id (:id cell)
+                          :phase   :output
+                          :message msg
+                          :errors  msg
+                          :data    (strip-mycelium-keys data)}})))))
 
        :else
        (let [coerced (m/decode output data number-coercion-transformer)]
@@ -299,11 +374,13 @@
                      output (get-in cell [:schema :output])
                      compiled-input  (compile-schema-value input)
                      compiled-output (cond
-                                      (nil? output)    nil
-                                      (map? output)    (into {} (map (fn [[k v]]
-                                                                       [k (compile-schema-value v)])
-                                                                     output))
-                                      :else            (compile-schema-value output))
+                                      (nil? output)            nil
+                                      (per-transition? output) [:per-transition
+                                                                (into {}
+                                                                      (map (fn [[k v]]
+                                                                             [k (compile-schema-value v)]))
+                                                                      (transitions-map output))]
+                                      :else                    (compile-schema-value output))
                      updated-cell (cond-> cell
                                     compiled-input  (assoc-in [:schema :input] compiled-input)
                                     (some? compiled-output) (assoc-in [:schema :output] compiled-output))]
