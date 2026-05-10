@@ -574,7 +574,7 @@ Stateful policies (circuit breaker, rate limiter) require `pre-compile` + `run-c
 {:id       :namespace/name    ;; cell registry ID
  :doc      "..."              ;; required — describes purpose and semantics for LLMs
  :schema   {:input  [...]     ;; Malli schema
-            :output [...]}    ;; single or per-transition
+            :output [...]}    ;; single schema, or [:per-transition {:label1 schema, :label2 schema}]
  :requires [:db]              ;; optional resource dependencies
  :on-error :cell-name}        ;; or nil — required in strict mode (default)
 ```
@@ -667,9 +667,10 @@ Use full Malli syntax when you need: enums (`[:enum :a :b]`), unions (`[:or :str
 ;; Single (all transitions)
 :output [:map [:result :int]]
 
-;; Per-transition
-:output {:success [:map [:data :string]]
-         :failure [:map [:error :string]]}
+;; Per-transition (wrapper is required — a bare map is always lite-map syntax)
+:output [:per-transition
+         {:success [:map [:data :string]]
+          :failure [:map [:error :string]]}]
 ```
 
 Per-transition schemas are validated based on which dispatch matched. The schema chain validator tracks available keys independently per path.

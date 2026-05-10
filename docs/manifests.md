@@ -234,9 +234,10 @@ The `:prompt` string contains everything an LLM needs to implement the cell: sch
  {:fetch-profile-by-id
   {:id       :user/fetch-profile-by-id
    :schema   {:input  [:map [:http-request [:map [:path-params [:map [:id :string]]]]]]
-              :output {:found     [:map [:profile map?]]
-                       :not-found [:map [:error-type :keyword]
-                                        [:error-message :string]]}}
+              :output [:per-transition
+                       {:found     [:map [:profile map?]]
+                        :not-found [:map [:error-type :keyword]
+                                         [:error-message :string]]}]}
    :on-error :render-error
    :requires [:db]}
 

@@ -20,9 +20,10 @@ Register cells via `defmethod` on the `cell/cell-spec` multimethod:
                    (assoc data :error-type :missing-token
                                :error-message "No auth token provided"))))
    :schema   {:input  [:map [:http-request [:map [:body map?]]]]
-              :output {:success [:map [:auth-token :string]]
-                       :failure [:map [:error-type :keyword]
-                                      [:error-message :string]]}}
+              :output [:per-transition
+                       {:success [:map [:auth-token :string]]
+                        :failure [:map [:error-type :keyword]
+                                       [:error-message :string]]}]}
    :requires []})
 ```
 
@@ -33,7 +34,7 @@ Register cells via `defmethod` on the `cell/cell-spec` multimethod:
 | `:id` | yes | Keyword identifier, conventionally `namespace/name` (e.g. `:auth/parse-request`) |
 | `:doc` | yes | Non-empty string describing the cell's purpose and semantics — helps LLMs understand how the cell should be used |
 | `:handler` | yes | `(fn [resources data] -> data)` for sync, or `(fn [resources data callback error-callback])` for async |
-| `:schema` | yes | Map with `:input` (Malli schema) and `:output` (single schema or per-transition map) |
+| `:schema` | yes | Map with `:input` (Malli schema) and `:output` (single schema or `[:per-transition {...}]` map) |
 | `:requires` | no | Vector of resource keys the handler needs (e.g. `[:db]`) |
 | `:async?` | no | Set to `true` for async handlers |
 
@@ -61,13 +62,14 @@ Register cells via `defmethod` on the `cell/cell-spec` multimethod:
 :output [:map [:result :int]]
 ```
 
-**Per-transition schemas** — each dispatch transition has its own contract:
+**Per-transition schemas** — each dispatch transition has its own contract. Wrap the map in `[:per-transition ...]`:
 ```clojure
-:output {:found     [:map [:profile [:map [:name :string] [:email :string]]]]
-         :not-found [:map [:error-type :keyword] [:error-message :string]]}
+:output [:per-transition
+         {:found     [:map [:profile [:map [:name :string] [:email :string]]]]
+          :not-found [:map [:error-type :keyword] [:error-message :string]]}]
 ```
 
-The transition keys in the output map must match the dispatch labels defined in the workflow's `:dispatches` for this cell.
+The transition keys must match the dispatch labels defined in the workflow's `:dispatches` for this cell. A bare map (without the `[:per-transition ...]` wrapper) is always interpreted as lite-map syntax, never per-transition.
 
 ## Rules
 
@@ -111,8 +113,9 @@ The transition keys in the output map must match the dispatch labels defined in 
                  (assoc data :error-type :not-found
                              :error-message "User not found")))
    :schema   {:input  [:map [:user-id :string]]
-              :output {:found     [:map [:profile [:map [:name :string] [:email :string]]]]
-                       :not-found [:map [:error-type :keyword] [:error-message :string]]}}
+              :output [:per-transition
+                       {:found     [:map [:profile [:map [:name :string] [:email :string]]]]
+                        :not-found [:map [:error-type :keyword] [:error-message :string]]}]}
    :requires [:db]})
 ```
 
