@@ -30,10 +30,10 @@
                        [:applicant-name {:optional true} [:maybe :string]]
                        [:income {:optional true} [:maybe number?]]
                        [:loan-amount {:optional true} [:maybe number?]]]
-             :output {:valid   [:map [:validation-status [:= :valid]]]
+             :output [:per-transition {:valid   [:map [:validation-status [:= :valid]]]
                       :invalid [:map
                                 [:validation-status [:= :invalid]]
-                                [:validation-errors [:vector :string]]]}}})
+                                [:validation-errors [:vector :string]]]}]}})
 
 ;; ===== Credit Assessment (subworkflow cells) =====
 
@@ -114,9 +114,9 @@
                   :else
                   (assoc data :decision :review))))
    :schema  {:input  [:map [:risk-level [:enum :low :medium :high]] [:loan-amount number?]]
-             :output {:approve [:map [:decision [:= :approve]]]
+             :output [:per-transition {:approve [:map [:decision [:= :approve]]]
                       :reject  [:map [:decision [:= :reject]]]
-                      :review  [:map [:decision [:= :review]]]}}})
+                      :review  [:map [:decision [:= :review]]]}]}})
 
 ;; ===== Decision Outcomes =====
 
@@ -222,10 +222,10 @@
                   (assoc data :fetch-status :not-found
                               :error-message (str "No application found for " name)))))
    :schema  {:input  [:map [:applicant-name :string]]
-             :output {:found     [:map [:fetch-status [:= :found]]]
+             :output [:per-transition {:found     [:map [:fetch-status [:= :found]]]
                       :not-found [:map
                                   [:fetch-status [:= :not-found]]
-                                  [:error-message :string]]}}
+                                  [:error-message :string]]}]}
    :requires [:app-store]})
 
 (defmethod cell/cell-spec :loan/format-status [_]

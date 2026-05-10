@@ -100,8 +100,8 @@
       {:id      :test/pt-coerce
        :handler (fn [_ data] data)
        :schema  {:input  [:map [:x :int]]
-                 :output {:success [:map [:y :int]]
-                          :failure [:map [:error-message :string]]}}})
+                 :output [:per-transition {:success [:map [:y :int]]
+                          :failure [:map [:error-message :string]]}]}})
     (let [cell   (cell/get-cell! :test/pt-coerce)
           result (schema/coerce-output cell {:y 42.0} :success)]
       (is (nil? (:error result)))
@@ -114,8 +114,8 @@
       {:id      :test/pt-coerce
        :handler (fn [_ data] data)
        :schema  {:input  [:map [:x :int]]
-                 :output {:success [:map [:y :int]]
-                          :failure [:map [:error-message :string]]}}})
+                 :output [:per-transition {:success [:map [:y :int]]
+                          :failure [:map [:error-message :string]]}]}})
     (let [cell   (cell/get-cell! :test/pt-coerce)
           result (schema/coerce-output cell {:y 42.0})]
       (is (nil? (:error result)))

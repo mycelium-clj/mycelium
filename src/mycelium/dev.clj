@@ -303,10 +303,14 @@
   (let [cell   (cell/get-cell cell-id)
         output (when cell (get-in cell [:schema :output]))]
     (cond
-      (nil? output)    #{}
-      (vector? output) (get-map-keys output)
-      (map? output)    (reduce (fn [acc [_ s]] (set/union acc (get-map-keys s))) #{} output)
-      :else            #{})))
+      (nil? output) #{}
+
+      (schema/per-transition? output)
+      (reduce (fn [acc [_ s]] (set/union acc (get-map-keys s)))
+              #{}
+              (schema/transitions-map output))
+
+      :else (or (get-map-keys output) #{}))))
 
 (defn- cell-input-keys
   "Returns the set of input keys for a cell."

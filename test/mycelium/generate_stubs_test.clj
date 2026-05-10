@@ -66,8 +66,8 @@
     (cell/defcell :stub/branching
       {:doc    "Classifies input as high or low"
        :input  [:map [:x :int]]
-       :output {:high [:map [:result [:= :high]]]
-                :low  [:map [:result [:= :low]]]}}
+       :output [:per-transition {:high [:map [:result [:= :high]]]
+                :low  [:map [:result [:= :low]]]}]}
       (fn [_ data] data))
     (let [stubs (dev/generate-stubs
                   {:cells {:start :stub/branching}

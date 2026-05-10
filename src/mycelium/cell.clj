@@ -37,14 +37,13 @@
                       {:id id}))))
 
 (defn- output-dispatched?
-  "Heuristic for defcell/set-cell-schema! (no edge context available):
-   a map output schema is per-transition if all values are vectors (Malli schema
-   forms like [:map ...], [:or ...], etc.). If any value is a keyword or map,
-   it's treated as lite syntax. For manifests, edge context is used instead.
-   Trade-off: per-transition maps with bare keyword schemas (e.g. {:success :any})
-   would be misclassified as lite — use vector form [:any] in that rare case."
+  "True when the output schema is in explicit per-transition form
+  `[:per-transition {tx schema, ...}]`. Pre-1.0 mycelium used a
+  heuristic over plain map outputs which silently misclassified
+  lite maps whose values happened to be vector schemas; the
+  marker is now mandatory and the heuristic is gone."
   [output]
-  (and (map? output) (seq output) (every? vector? (vals output))))
+  (schema/per-transition? output))
 
 (defn set-cell-schema!
   "Sets or overwrites the schema for an already-registered cell.

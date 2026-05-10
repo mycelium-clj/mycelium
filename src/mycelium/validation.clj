@@ -20,17 +20,28 @@
                       {:label label :schema schema}
                       e)))))
 
+(defn- per-transition-output?
+  "True when `output-schema` is in explicit per-transition form.
+   Duplicated from mycelium.schema/per-transition? to avoid a
+   cyclic dependency (schema → validation → schema)."
+  [output-schema]
+  (and (vector? output-schema)
+       (= 2 (count output-schema))
+       (= :per-transition (first output-schema))
+       (map? (second output-schema))))
+
 (defn validate-output-schema!
-  "Validates an output schema which may be a single schema (vector/keyword)
-   or a per-transition map. If a map, validates each value as a Malli schema."
+  "Validates an output schema: either a single Malli schema, or an
+   explicit per-transition wrapper [:per-transition {tx schema, ...}]
+   whose inner values are each Malli schemas."
   [output-schema label]
   (cond
+    (per-transition-output? output-schema)
+    (doseq [[k v] (second output-schema)]
+      (validate-malli-schema! v (str label " transition " k)))
+
     (vector? output-schema)
     (validate-malli-schema! output-schema label)
-
-    (map? output-schema)
-    (doseq [[k v] output-schema]
-      (validate-malli-schema! v (str label " transition " k)))
 
     :else
     (validate-malli-schema! output-schema label)))

@@ -150,8 +150,8 @@
     (myc/defcell :ic-test/branching
       {:doc    "Returns either an :ok or :failed shape."
        :input  [:map [:want [:enum :ok :failed]]]
-       :output {:ok     [:map [:result :int]]
-                :failed [:map [:error :string]]}}
+       :output [:per-transition {:ok     [:map [:result :int]]
+                :failed [:map [:error :string]]}]}
       (fn [_ {:keys [want]}]
         (case want
           :ok     {:mycelium/transition :ok     :result 42}
@@ -164,7 +164,7 @@
       (myc/defcell :ic-test/branching-bad
         {:doc    "Returns :ok transition but the wrong shape."
          :input  [:map]
-         :output {:ok [:map [:result :int]]}}
+         :output [:per-transition {:ok [:map [:result :int]]}]}
         (fn [_ _] {:mycelium/transition :ok :result "not-an-int"}))
       (let [thrown (try (myc/invoke-cell :ic-test/branching-bad {} {})
                         (catch clojure.lang.ExceptionInfo e e))]

@@ -19,19 +19,19 @@
     {:id     :auth/extract-cookie-session
      :doc    "Extracts auth token from HTTP cookie session"
      :schema {:input  [:map [:http-request [:map]]]
-              :output {:success [:map [:auth-token :string]]
+              :output [:per-transition {:success [:map [:auth-token :string]]
                        :failure [:map [:error-type :keyword]
-                                      [:error-message :string]]}}
+                                      [:error-message :string]]}]}
      :on-error :_exit/failure}
     :validate-session
     {:id     :auth/validate-session
      :doc    "Validates auth token against session store"
      :schema {:input  [:map [:auth-token :string]]
-              :output {:authorized   [:map [:session-valid :boolean]
+              :output [:per-transition {:authorized   [:map [:session-valid :boolean]
                                            [:user-id :string]]
                        :unauthorized [:map [:session-valid :boolean]
                                            [:error-type :keyword]
-                                           [:error-message :string]]}}
+                                           [:error-message :string]]}]}
      :on-error :_exit/failure}}
    :edges
    {:extract-session  {:success :validate-session
@@ -177,14 +177,14 @@
       {:id      :frag/extract
        :handler (fn [_ data] (assoc data :auth-token "tok-123"))
        :schema  {:input [:map [:http-request [:map]]]
-                 :output {:success [:map [:auth-token :string]]
-                          :failure [:map [:error-type :keyword]]}}})
+                 :output [:per-transition {:success [:map [:auth-token :string]]
+                          :failure [:map [:error-type :keyword]]}]}})
     (defmethod cell/cell-spec :frag/validate [_]
       {:id      :frag/validate
        :handler (fn [_ data] (assoc data :user-id "u1" :session-valid true))
        :schema  {:input [:map [:auth-token :string]]
-                 :output {:authorized [:map [:session-valid :boolean] [:user-id :string]]
-                          :unauthorized [:map [:session-valid :boolean] [:error-type :keyword]]}}})
+                 :output [:per-transition {:authorized [:map [:session-valid :boolean] [:user-id :string]]
+                          :unauthorized [:map [:session-valid :boolean] [:error-type :keyword]]}]}})
     (defmethod cell/cell-spec :frag/render-dashboard [_]
       {:id      :frag/render-dashboard
        :handler (fn [_ data] (assoc data :html "<h1>Dashboard</h1>"))
@@ -200,13 +200,13 @@
                 :cells {:extract  {:id     :frag/extract
                                    :doc    "Extracts auth token from request"
                                    :schema {:input  [:map [:http-request [:map]]]
-                                            :output {:success [:map [:auth-token :string]]
-                                                     :failure [:map [:error-type :keyword]]}}}
+                                            :output [:per-transition {:success [:map [:auth-token :string]]
+                                                     :failure [:map [:error-type :keyword]]}]}}
                         :validate {:id     :frag/validate
                                    :doc    "Validates auth token"
                                    :schema {:input  [:map [:auth-token :string]]
-                                            :output {:authorized   [:map [:session-valid :boolean] [:user-id :string]]
-                                                     :unauthorized [:map [:session-valid :boolean] [:error-type :keyword]]}}}}
+                                            :output [:per-transition {:authorized   [:map [:session-valid :boolean] [:user-id :string]]
+                                                     :unauthorized [:map [:session-valid :boolean] [:error-type :keyword]]}]}}}
                 :edges {:extract  {:success :validate
                                    :failure :_exit/failure}
                         :validate {:authorized   :_exit/success

@@ -12,12 +12,12 @@
                         [:http-request [:map
                           [:headers map?]
                           [:body map?]]]]
-              :output {:success [:map
+              :output [:per-transition {:success [:map
                                   [:user-id :string]
                                   [:auth-token :string]]
                        :failure [:map
                                   [:error-type :keyword]
-                                  [:error-message :string]]}}
+                                  [:error-message :string]]}]}
    :on-error :_exit/failure
    :requires []}
 
@@ -27,13 +27,13 @@
    :schema   {:input  [:map
                         [:user-id :string]
                         [:auth-token :string]]
-              :output {:authorized   [:map
+              :output [:per-transition {:authorized   [:map
                                        [:session-valid :boolean]
                                        [:user-id :string]]
                        :unauthorized [:map
                                        [:session-valid :boolean]
                                        [:error-type :keyword]
-                                       [:error-message :string]]}}
+                                       [:error-message :string]]}]}
    :on-error :_exit/failure
    :requires [:db]}
 
@@ -43,11 +43,11 @@
    :schema   {:input  [:map
                         [:user-id :string]
                         [:session-valid :boolean]]
-              :output {:found     [:map
+              :output [:per-transition {:found     [:map
                                     [:profile map?]]
                        :not-found [:map
                                     [:error-type :keyword]
-                                    [:error-message :string]]}}
+                                    [:error-message :string]]}]}
    :on-error :_exit/failure
    :requires [:db]}}
 

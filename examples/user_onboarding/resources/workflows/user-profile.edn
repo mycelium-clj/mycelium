@@ -17,11 +17,11 @@
                         [:http-request [:map
                           [:path-params [:map
                             [:id :string]]]]]]
-              :output {:found     [:map
+              :output [:per-transition {:found     [:map
                                     [:profile map?]]
                        :not-found [:map
                                     [:error-type :keyword]
-                                    [:error-message :string]]}}
+                                    [:error-message :string]]}]}
    :on-error :render-error
    :requires [:db]}
 

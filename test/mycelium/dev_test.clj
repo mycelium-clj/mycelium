@@ -80,8 +80,8 @@
                         (assoc data :profile {:name "Alice"})
                         (assoc data :error-message "Not found")))
        :schema      {:input [:map [:id :string]]
-                     :output {:found     [:map [:profile [:map [:name :string]]]]
-                              :not-found [:map [:error-message :string]]}}})
+                     :output [:per-transition {:found     [:map [:profile [:map [:name :string]]]]
+                              :not-found [:map [:error-message :string]]}]}})
     (let [dispatches [[:found     (fn [d] (:profile d))]
                       [:not-found (fn [d] (:error-message d))]]
           result (dev/test-cell :dev/dispatch-cell
@@ -97,8 +97,8 @@
        :handler     (fn [_ data]
                       (assoc data :error-message "Not found"))
        :schema      {:input [:map [:id :string]]
-                     :output {:found     [:map [:profile [:map [:name :string]]]]
-                              :not-found [:map [:error-message :string]]}}})
+                     :output [:per-transition {:found     [:map [:profile [:map [:name :string]]]]
+                              :not-found [:map [:error-message :string]]}]}})
     (let [dispatches [[:found     (fn [d] (:profile d))]
                       [:not-found (fn [d] (:error-message d))]]
           result (dev/test-cell :dev/dispatch-cell2
@@ -114,8 +114,8 @@
        :handler     (fn [_ data]
                       (assoc data :profile {:name "Alice"}))
        :schema      {:input [:map [:id :string]]
-                     :output {:found     [:map [:profile [:map [:name :string]]]]
-                              :not-found [:map [:error-message :string]]}}})
+                     :output [:per-transition {:found     [:map [:profile [:map [:name :string]]]]
+                              :not-found [:map [:error-message :string]]}]}})
     (let [dispatches [[:found     (fn [d] (:profile d))]
                       [:not-found (fn [d] (:error-message d))]]]
       ;; Correct expectation
@@ -139,8 +139,8 @@
        :handler     (fn [_ data]
                       (assoc data :profile {:name "Alice"}))
        :schema      {:input [:map [:id :string]]
-                     :output {:found     [:map [:profile [:map [:name :string]]]]
-                              :not-found [:map [:error-message :string]]}}})
+                     :output [:per-transition {:found     [:map [:profile [:map [:name :string]]]]
+                              :not-found [:map [:error-message :string]]}]}})
     (let [dispatches [[:found     (fn [d] (:profile d))]
                       [:not-found (fn [d] (:error-message d))]]
           result (dev/test-cell :dev/pt-cell
@@ -159,8 +159,8 @@
                         (assoc data :profile {:name "Alice"})
                         (assoc data :error-message "Not found")))
        :schema      {:input [:map [:id :string]]
-                     :output {:found     [:map [:profile [:map [:name :string]]]]
-                              :not-found [:map [:error-message :string]]}}})
+                     :output [:per-transition {:found     [:map [:profile [:map [:name :string]]]]
+                              :not-found [:map [:error-message :string]]}]}})
     (let [dispatches [[:found     (fn [d] (:profile d))]
                       [:not-found (fn [d] (:error-message d))]]
           results (dev/test-transitions :dev/multi-cell
@@ -347,7 +347,7 @@
       {:id      :dev/schema-router
        :handler (fn [_ data] data)
        :schema  {:input [:map [:x :int]]
-                 :output {:ok [:map [:a :int]] :fail [:map [:err :string]]}}})
+                 :output [:per-transition {:ok [:map [:a :int]] :fail [:map [:err :string]]}]}})
     (defmethod cell/cell-spec :dev/schema-leaf [_]
       {:id      :dev/schema-leaf
        :handler (fn [_ data] (assoc data :done true))

@@ -35,35 +35,36 @@
 ;; ===== 2. normalize-output-schema: dispatched vs single =====
 
 (deftest normalize-output-schema-test
-  (testing "Non-dispatched map output is treated as lite schema"
+  (testing "Map output is normalized as lite syntax"
     (is (= [:map [:tax :double]]
-           (schema/normalize-output-schema {:tax :double} false))))
+           (schema/normalize-output-schema {:tax :double}))))
 
-  (testing "Dispatched map output normalizes each transition value"
-    (is (= {:success [:map [:result :string]]
-            :failure [:map [:error :string]]}
+  (testing "Explicit per-transition wrapper normalizes each transition value"
+    (is (= [:per-transition {:success [:map [:result :string]]
+                             :failure [:map [:error :string]]}]
            (schema/normalize-output-schema
-            {:success {:result :string}
-             :failure {:error :string}}
-            true))))
+            [:per-transition {:success {:result :string}
+                              :failure {:error  :string}}]))))
 
-  (testing "Dispatched map output with existing Malli vectors passes through"
-    (is (= {:high [:map [:result [:= :high]]]
-            :low  [:map [:result [:= :low]]]}
+  (testing "Per-transition wrapper with already-normalized Malli vectors passes through"
+    (is (= [:per-transition {:high [:map [:result [:= :high]]]
+                             :low  [:map [:result [:= :low]]]}]
            (schema/normalize-output-schema
+            [:per-transition {:high [:map [:result [:= :high]]]
+                              :low  [:map [:result [:= :low]]]}]))))
+
+  (testing "Implicit per-transition map (all-vector values, unnamespaced keys) is rejected"
+    (is (thrown-with-msg? Exception #"Implicit per-transition output schema"
+          (schema/normalize-output-schema
             {:high [:map [:result [:= :high]]]
-             :low  [:map [:result [:= :low]]]}
-            true))))
+             :low  [:map [:result [:= :low]]]}))))
 
-  (testing "Vector output passes through regardless of dispatch flag"
+  (testing "Vector output passes through"
     (is (= [:map [:x :int]]
-           (schema/normalize-output-schema [:map [:x :int]] false)))
-    (is (= [:map [:x :int]]
-           (schema/normalize-output-schema [:map [:x :int]] true))))
+           (schema/normalize-output-schema [:map [:x :int]]))))
 
   (testing "nil output passes through"
-    (is (nil? (schema/normalize-output-schema nil false)))
-    (is (nil? (schema/normalize-output-schema nil true)))))
+    (is (nil? (schema/normalize-output-schema nil)))))
 
 ;; ===== 3. defcell with lite syntax =====
 
@@ -98,18 +99,17 @@
       (is (= [:map [:x :int]] (get-in spec [:schema :input])))
       (is (= [:map [:y :int]] (get-in spec [:schema :output])))))
 
-  (testing "defcell with per-transition vector output is unchanged"
+  (testing "defcell with explicit per-transition output is preserved"
     (cell/defcell :test/per-transition
       {:doc    "Classifies x as high or low"
        :input  {:x :int}
-       :output {:high [:map [:result [:= :high]]]
-                :low  [:map [:result [:= :low]]]}}
+       :output [:per-transition {:high [:map [:result [:= :high]]]
+                                 :low  [:map [:result [:= :low]]]}]}
       (fn [_ data]
         {:result (if (> (:x data) 10) :high :low)}))
-    (let [spec (cell/get-cell :test/per-transition)]
-      ;; Per-transition values are vectors, so they stay as per-transition map
-      (is (map? (get-in spec [:schema :output])))
-      (is (= #{:high :low} (set (keys (get-in spec [:schema :output]))))))))
+    (let [output (get-in (cell/get-cell :test/per-transition) [:schema :output])]
+      (is (= :per-transition (first output)))
+      (is (= #{:high :low} (set (keys (second output))))))))
 
 ;; ===== 4. set-cell-schema! with lite syntax =====
 
@@ -215,8 +215,9 @@
              :cells {:start {:id :test/branch
                               :doc "Classifies x as positive or negative"
                               :schema {:input {:x :int}
-                                       :output {:positive {:sign :keyword}
-                                                :negative {:sign :keyword}}}
+                                       :output [:per-transition
+                                                {:positive {:sign :keyword}
+                                                 :negative {:sign :keyword}}]}
                               :on-error nil}}
              :edges {:start {:positive :end :negative :end}}
              :dispatches {:start [[:positive (fn [d] (= :positive (:sign d)))]

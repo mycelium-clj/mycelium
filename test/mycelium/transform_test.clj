@@ -28,8 +28,8 @@
                 {:tier (if (> (:score data) 80) :premium :basic)
                  :raw-score (:score data)})
      :schema  {:input  [:map [:score :int]]
-               :output {:premium [:map [:tier [:= :premium]] [:raw-score :int]]
-                        :basic   [:map [:tier [:= :basic]] [:raw-score :int]]}}})
+               :output [:per-transition {:premium [:map [:tier [:= :premium]] [:raw-score :int]]
+                        :basic   [:map [:tier [:= :basic]] [:raw-score :int]]}]}})
   ;; Cell that expects :level (not :tier)
   (defmethod cell/cell-spec :xf/premium-handler [_]
     {:id      :xf/premium-handler

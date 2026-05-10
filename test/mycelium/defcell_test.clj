@@ -72,13 +72,13 @@
     (cell/defcell :test/branching
       {:doc    "Classifies input as high or low based on threshold"
        :input  [:map [:x :int]]
-       :output {:high [:map [:result [:= :high]]]
-                :low  [:map [:result [:= :low]]]}}
+       :output [:per-transition {:high [:map [:result [:= :high]]]
+                :low  [:map [:result [:= :low]]]}]}
       (fn [_ data]
         {:result (if (> (:x data) 10) :high :low)}))
-    (let [spec (cell/get-cell :test/branching)]
-      (is (map? (get-in spec [:schema :output])))
-      (is (= #{:high :low} (set (keys (get-in spec [:schema :output]))))))))
+    (let [output (get-in (cell/get-cell :test/branching) [:schema :output])]
+      (is (= :per-transition (first output)))
+      (is (= #{:high :low} (set (keys (second output))))))))
 
 ;; ===== 6. defcell works in workflow =====
 

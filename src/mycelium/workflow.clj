@@ -85,44 +85,73 @@
 ;; ===== Schema key utilities =====
 
 (defn- get-map-keys
-  "Extracts top-level keys from a Malli schema. Returns nil if not a map schema.
-   Handles both normalized [:map [:k v] ...] and lite syntax {:k v}.
-   Skips Malli property maps (e.g. {:closed true} in [:map {:closed true} [:x :int]])."
-  [schema]
-  (cond
-    ;; Standard Malli vector syntax: [:map [:k1 v1] [:k2 v2] ...]
-    (and (vector? schema) (= :map (first schema)))
-    (set (keep (fn [entry]
-                 (when (vector? entry)
-                   (first entry)))
-               (rest schema)))
+  "Extracts top-level keys from a Malli :map schema. Returns nil if
+  not a map schema.
 
-    ;; Lite map syntax: {:k1 v1 :k2 v2}
-    (map? schema)
-    (set (keys schema))))
+  Handles both normalized `[:map [:k v] ...]` and lite syntax `{:k v}`.
+  Skips Malli property maps (e.g. `{:closed true}` in
+  `[:map {:closed true} [:x :int]]`).
+
+  `:include-optional?` (default true) — when false, child entries
+  carrying `{:optional true}` are filtered out. The schema-chain
+  validator uses :include-optional? false when collecting a cell's
+  REQUIRED inputs, so that upstream cells aren't forced to produce
+  keys the downstream cell has declared optional."
+  ([schema] (get-map-keys schema {}))
+  ([schema {:keys [include-optional?] :or {include-optional? true}}]
+   (cond
+     ;; Standard Malli vector syntax: [:map [:k1 v1] [:k1 opts v1] ...]
+     (and (vector? schema) (= :map (first schema)))
+     (set (keep (fn [entry]
+                  (when (vector? entry)
+                    (let [k    (first entry)
+                          opts (when (and (= 3 (count entry))
+                                          (map? (second entry)))
+                                 (second entry))]
+                      (when (or include-optional? (not (:optional opts)))
+                        k))))
+                (rest schema)))
+
+     ;; Lite map syntax: {:k1 v1 :k2 v2}. Lite syntax has no
+     ;; per-key optional modifier — every key is required.
+     (map? schema)
+     (set (keys schema)))))
+
+(defn- get-required-input-keys
+  "Required (non-optional) input keys for a cell."
+  [cell-id]
+  (let [cell   (cell/get-cell! cell-id)
+        schema (get-in cell [:schema :input])]
+    (get-map-keys schema {:include-optional? false})))
+
+(defn- per-transition-output? [output]
+  (schema/per-transition? output))
+
+(defn- transitions [output]
+  (schema/transitions-map output))
 
 (defn- get-output-keys-for-transition
   "Gets output keys for a specific transition of a cell.
-   For vector output schema, returns all keys for any transition.
-   For map output schema, returns keys for that specific transition.
-   When the exact transition key isn't found (e.g., parent uses :approve but composed
-   cell uses :success/:failure), falls back to the union of all transitions' keys."
+   For single-schema outputs, returns its keys (same for any transition).
+   For explicit per-transition outputs, returns keys for that
+   transition (or the union across transitions when the transition
+   isn't present — handles composed cells where the parent workflow's
+   edge labels don't match the composed cell's transitions)."
   [cell-id transition]
   (let [cell   (cell/get-cell! cell-id)
         output (get-in cell [:schema :output])]
     (cond
-      (nil? output)    nil
-      (vector? output) (get-map-keys output)
-      (map? output)    (if-let [schema (get output transition)]
-                         (get-map-keys schema)
-                         ;; Transition not found — fall back to union of all output keys.
-                         ;; This handles composed cells where the parent workflow's edge labels
-                         ;; (:approve, :review) don't match the composed cell's transitions
-                         ;; (:success, :failure) — the dispatch predicates handle the mapping.
-                         (reduce (fn [acc [_ schema]]
-                                   (into acc (get-map-keys schema)))
-                                 #{}
-                                 output)))))
+      (nil? output) nil
+
+      (per-transition-output? output)
+      (if-let [schema (get (transitions output) transition)]
+        (get-map-keys schema)
+        (reduce (fn [acc [_ schema]]
+                  (into acc (get-map-keys schema)))
+                #{}
+                (transitions output)))
+
+      :else (get-map-keys output))))
 
 (defn- get-all-output-keys
   "Gets the union of all output keys across all transitions.
@@ -131,12 +160,15 @@
   (let [cell   (cell/get-cell! cell-id)
         output (get-in cell [:schema :output])]
     (cond
-      (nil? output)    nil
-      (vector? output) (get-map-keys output)
-      (map? output)    (reduce (fn [acc [_ schema]]
-                                 (into acc (get-map-keys schema)))
-                               #{}
-                               output))))
+      (nil? output) nil
+
+      (per-transition-output? output)
+      (reduce (fn [acc [_ schema]]
+                (into acc (get-map-keys schema)))
+              #{}
+              (transitions output))
+
+      :else (get-map-keys output))))
 
 (defn- get-join-member-output-keys
   "Gets the union of all output keys from a single join member cell."
@@ -144,12 +176,15 @@
   (let [cell   (cell/get-cell! cell-id)
         output (get-in cell [:schema :output])]
     (cond
-      (nil? output)    #{}
-      (vector? output) (or (get-map-keys output) #{})
-      (map? output)    (reduce (fn [acc [_ schema]]
-                                 (into acc (or (get-map-keys schema) #{})))
-                               #{}
-                               output))))
+      (nil? output) #{}
+
+      (per-transition-output? output)
+      (reduce (fn [acc [_ schema]]
+                (into acc (or (get-map-keys schema) #{})))
+              #{}
+              (transitions output))
+
+      :else (or (get-map-keys output) #{}))))
 
 ;; ===== Join validation =====
 
@@ -458,10 +493,12 @@
     (get-map-keys schema)))
 
 (defn- get-transform-input-keys
-  "Extracts input keys from a transform spec's :schema :input, if present."
+  "Extracts required input keys from a transform spec's :schema :input,
+   if present. Optional keys are filtered out so the schema-chain
+   validator doesn't demand them from upstream producers."
   [transform-spec]
   (when-let [schema (get-in transform-spec [:schema :input])]
-    (get-map-keys schema)))
+    (get-map-keys schema {:include-optional? false})))
 
 (defn- validate-schema-chain!
   "Walks all paths from :start, accumulating output keys.
@@ -473,10 +510,11 @@
   ([edges-map cells-map joins-map]
    (validate-schema-chain! edges-map cells-map joins-map nil))
   ([edges-map cells-map joins-map transforms]
-   (let [get-input-keys  (fn [cell-id]
-                           (let [cell   (cell/get-cell! cell-id)
-                                 schema (get-in cell [:schema :input])]
-                             (get-map-keys schema)))
+   (let [;; Required (non-optional) input keys only. A downstream
+         ;; cell that declares `[:k {:optional true} ...]` doesn't
+         ;; force upstream cells to produce :k.
+         get-input-keys  (fn [cell-id]
+                           (get-required-input-keys cell-id))
          errors (atom [])
          visit  (fn visit [cell-name available-keys visited]
                   (when-not (or (contains? visited cell-name)
