@@ -53,11 +53,17 @@
             [:per-transition {:high [:map [:result [:= :high]]]
                               :low  [:map [:result [:= :low]]]}]))))
 
-  (testing "Implicit per-transition map (all-vector values, unnamespaced keys) is rejected"
-    (is (thrown-with-msg? Exception #"Implicit per-transition output schema"
-          (schema/normalize-output-schema
+  (testing "Plain map output is always lite syntax, even when values are vectors"
+    (is (= [:map
+            [:high [:map [:result [:= :high]]]]
+            [:low  [:map [:result [:= :low]]]]]
+           (schema/normalize-output-schema
             {:high [:map [:result [:= :high]]]
              :low  [:map [:result [:= :low]]]}))))
+
+  (testing "Malformed [:per-transition ...] wrapper is rejected"
+    (is (thrown-with-msg? Exception #"Malformed \[:per-transition"
+          (schema/normalize-output-schema [:per-transition]))))
 
   (testing "Vector output passes through"
     (is (= [:map [:x :int]]

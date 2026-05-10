@@ -35,15 +35,9 @@
    explicit per-transition wrapper [:per-transition {tx schema, ...}]
    whose inner values are each Malli schemas."
   [output-schema label]
-  (cond
-    (per-transition-output? output-schema)
+  (if (per-transition-output? output-schema)
     (doseq [[k v] (second output-schema)]
       (validate-malli-schema! v (str label " transition " k)))
-
-    (vector? output-schema)
-    (validate-malli-schema! output-schema label)
-
-    :else
     (validate-malli-schema! output-schema label)))
 
 ;; ===== Cell definition validation =====

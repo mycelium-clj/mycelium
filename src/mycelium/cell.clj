@@ -36,15 +36,6 @@
       (throw (ex-info (str "Cell " id " not found in registry")
                       {:id id}))))
 
-(defn- output-dispatched?
-  "True when the output schema is in explicit per-transition form
-  `[:per-transition {tx schema, ...}]`. Pre-1.0 mycelium used a
-  heuristic over plain map outputs which silently misclassified
-  lite maps whose values happened to be vector schemas; the
-  marker is now mandatory and the heuristic is gone."
-  [output]
-  (schema/per-transition? output))
-
 (defn set-cell-schema!
   "Sets or overwrites the schema for an already-registered cell.
    Normalizes lite syntax, validates Malli, then updates.
@@ -53,8 +44,7 @@
   (when-not (cell-spec cell-id)
     (throw (ex-info (str "Cell " cell-id " not found in registry")
                     {:id cell-id})))
-  (let [dispatched? (output-dispatched? (:output schema))
-        schema (schema/normalize-cell-schema schema dispatched?)]
+  (let [schema (schema/normalize-cell-schema schema)]
     (when (:input schema)
       (v/validate-malli-schema! (:input schema) (str cell-id " :input")))
     (when (:output schema)
@@ -128,9 +118,8 @@
         opt-keys    #{:doc :requires :async?}
         raw-schema  (let [s (select-keys opts schema-keys)]
                       (when (seq s) s))
-        dispatched? (and raw-schema (output-dispatched? (:output raw-schema)))
         schema      (when raw-schema
-                      (schema/normalize-cell-schema raw-schema dispatched?))
+                      (schema/normalize-cell-schema raw-schema))
         extra       (select-keys opts opt-keys)
         spec        (cond-> {:id cell-id :handler handler-fn :doc (:doc extra)}
                       schema (assoc :schema schema)

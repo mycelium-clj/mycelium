@@ -42,21 +42,6 @@
   (when (per-transition? output)
     (second output)))
 
-(defn- looks-like-implicit-per-transition?
-  "Detects the OLD implicit per-transition form: a plain map whose
-  values are all vector schemas. Used only to produce a clear
-  migration error — the implicit form is no longer accepted."
-  [output]
-  (and (map? output)
-       (seq output)
-       (every? vector? (vals output))
-       ;; Sanity: per-transition keys are simple keywords (edge
-       ;; labels like :ok / :failed / :high / :low). If any key has
-       ;; a namespace, it's almost certainly a lite map of
-       ;; namespaced data keys whose values happen to be vectors
-       ;; like [:maybe :string].
-       (not-any? namespace (keys output))))
-
 ;; ===== Lite schema normalization =====
 
 (defn normalize-schema
@@ -97,48 +82,38 @@
     * `{:k schema, :k2 schema, ...}` — lite map syntax, normalized
       to `[:map [:k schema] [:k2 schema] ...]`.
 
-  Rejects the pre-1.0 implicit per-transition shape (a plain map
-  whose values are all vectors and whose keys are unnamespaced)
-  with a migration error.
+  Throws on a malformed `[:per-transition ...]` wrapper (anything
+  other than `[:per-transition {...}]`)."
+  [schema]
+  (cond
+    (nil? schema) nil
 
-  The `dispatched?` parameter is accepted for backwards
-  compatibility but is no longer consulted — per-transition is
-  determined entirely by the explicit `[:per-transition ...]`
-  wrapper."
-  ([schema] (normalize-output-schema schema false))
-  ([schema _dispatched?]
-   (cond
-     (nil? schema) nil
+    (per-transition? schema)
+    [:per-transition (into {} (map (fn [[k v]] [k (normalize-schema v)]))
+                           (transitions-map schema))]
 
-     (per-transition? schema)
-     [:per-transition (into {} (map (fn [[k v]] [k (normalize-schema v)]))
-                            (transitions-map schema))]
+    (and (vector? schema) (= :per-transition (first schema)))
+    (throw (ex-info
+             (str "Malformed [:per-transition ...] output schema. "
+                  "Expected [:per-transition {transition-label schema, ...}], got: "
+                  (pr-str schema))
+             {:schema schema}))
 
-     (vector? schema) schema
+    (vector? schema) schema
 
-     (looks-like-implicit-per-transition? schema)
-     (throw (ex-info
-              (str "Implicit per-transition output schema is no longer "
-                   "supported. Wrap the transition map in [:per-transition ...]:\n"
-                   "  Old: :output " (pr-str schema) "\n"
-                   "  New: :output " (pr-str [:per-transition schema]))
-              {:schema schema}))
+    (map? schema) (normalize-schema schema)
 
-     (map? schema) (normalize-schema schema)
-
-     :else schema)))
+    :else schema))
 
 (defn normalize-cell-schema
-  "Normalizes a cell's :schema map, converting lite syntax to Malli.
-   `dispatched?` — true if the cell has branching edges (per-transition output)."
-  ([schema] (normalize-cell-schema schema false))
-  ([schema dispatched?]
-   (when schema
-     (let [input  (:input schema)
-           output (:output schema)]
-       (cond-> schema
-         input  (assoc :input (normalize-schema input))
-         output (assoc :output (normalize-output-schema output dispatched?)))))))
+  "Normalizes a cell's :schema map, converting lite syntax to Malli."
+  [schema]
+  (when schema
+    (let [input  (:input schema)
+          output (:output schema)]
+      (cond-> schema
+        input  (assoc :input (normalize-schema input))
+        output (assoc :output (normalize-output-schema output))))))
 
 (def ^:private terminal-states
   #{::fsm/end ::fsm/error ::fsm/halt})
