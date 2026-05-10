@@ -25,9 +25,12 @@ The wrapper is now mandatory:
 ```
 
 Bare map output schemas are now ALWAYS lite-map syntax, never
-per-transition. The migration error message includes the exact
-rewrite for each cell that needs updating. EDN manifest files
-follow the same form.
+per-transition. An implicit pre-1.0 shape like `{:high [:map ...]
+:low [:map ...]}` is silently normalized to
+`[:map [:high [:map ...]] [:low [:map ...]]]` rather than throwing;
+re-wrap it in `[:per-transition ...]` if per-transition semantics
+were intended. Malformed `[:per-transition ...]` wrappers throw a
+clear shape error. EDN manifest files follow the same form.
 
 ### Fix: schema-chain validator honors `{:optional true}` on inputs
 
