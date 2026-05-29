@@ -8,6 +8,7 @@
             [mycelium.compose :as compose]
             [mycelium.manifest :as manifest]
             [mycelium.middleware :as mw]
+            [mycelium.queue :as queue]
             [mycelium.system :as sys]
             [clojure.set :as set]
             [malli.core :as m]
@@ -387,3 +388,159 @@
   "Returns true if the workflow result contains any error."
   [result]
   (some? (workflow-error result)))
+
+;; --- Queue API ---
+
+(defn enqueue-workflow
+  "Enqueues a workflow for asynchronous execution.
+
+  `queue` — a WorkQueue implementation (e.g., from `mycelium.queue/memory-queue`).
+  `workflow-name` — keyword identifying the workflow (used by worker to look up compiled spec).
+  `compiled-workflow` — pre-compiled workflow (from `pre-compile`). The input schema
+    is validated at enqueue time; invalid data throws immediately.
+  `initial-data` — the initial data map for the workflow.
+  `opts` — optional map:
+    :run-at       — epoch-ms when the task becomes available (default: now)
+    :max-attempts — max retries before dead-letter (default: 1)
+
+  Returns a UUID task-id. Use `start-worker` to process enqueued tasks.
+
+  For halt/resume workflows, session-id = (str task-id) — deterministic
+  correlation between the enqueued task and the persisted session."
+  ([queue workflow-name compiled-workflow initial-data]
+   (enqueue-workflow queue workflow-name compiled-workflow initial-data {}))
+  ([queue workflow-name compiled-workflow initial-data opts]
+   (when-let [err (check-input-schema compiled-workflow initial-data)]
+     (throw (ex-info (str "Enqueue input validation failed: " (:errors err))
+                     {:type :mycelium.enqueue/input-error
+                      :workflow-name workflow-name
+                      :details err})))
+   (queue/enqueue! queue workflow-name
+     {:initial-data initial-data}
+     opts)))
+
+(defn start-worker
+  "Starts a worker loop that claims tasks from the queue and executes them.
+
+  `queue` — a WorkQueue implementation.
+  `workflows` — map of {workflow-name => compiled-workflow}.
+  `resources` — resources map passed to workflow handlers.
+
+  Returns a future that runs the worker loop. The loop continues until
+  the future is cancelled. Each task is claimed, executed, and completed
+  or failed based on the result.
+
+  Resume: when task data contains :mycelium/session-id, the worker uses
+  :resume-load, :resume-save, and :resume-delete callbacks to manage
+  halted workflow state. See `mycelium.store/start-worker-with-store`
+  for a convenience wrapper that supplies these from a WorkflowStore.
+
+  Halt handling: when a workflow halts (returns :mycelium/resume):
+  - With :on-halt: checks claimed? first to guard against stale leases,
+    then invokes (on-halt result) and passes the return value to complete!.
+  - Without :on-halt: dead-letters the task with a descriptive error.
+
+  Options:
+    :worker-id      — string identifying this worker (default: auto-generated)
+    :poll-ms        — ms to sleep when queue is empty (default: 1000)
+    :heartbeat-ms   — ms between heartbeat! calls during task execution
+                      (default: no heartbeat). Set to ~claim-timeout-ms/3
+                      for long-running workflows.
+    :on-halt        — (fn [result] -> result) called when a workflow halts
+                      (returns :mycelium/resume). The returned value is passed
+                      to complete!. Use this to persist halted state.
+    :resume-load    — (fn [session-id] -> halted-data-or-nil). Required for resume.
+    :resume-save    — (fn [session-id data] -> session-id). Required for resume.
+    :resume-delete  — (fn [session-id] -> nil). Required for resume."
+  ([queue workflows resources]
+   (start-worker queue workflows resources {}))
+  ([queue workflows resources {:keys [worker-id poll-ms heartbeat-ms on-halt
+                                      resume-load resume-save resume-delete]
+                               :or {poll-ms 1000}}]
+   (let [worker-id (or worker-id (str (java.util.UUID/randomUUID)))
+         heartbeat-thread (volatile! nil)]
+     (future
+       (loop []
+         (if-let [task (queue/claim! queue worker-id)]
+           (let [wf-name (:workflow-name task)
+                 compiled (get workflows wf-name)
+                 task-id (:task-id task)]
+               (if-not compiled
+                 (do
+                   (queue/fail! queue task-id worker-id
+                     (ex-info (str "Unknown workflow: " wf-name) {}))
+                   (recur))
+                 (do
+                   (let [cancel-heartbeat (fn []
+                                            (when-let [t @heartbeat-thread]
+                                              (future-cancel t)
+                                              (vreset! heartbeat-thread nil)))
+                         _ (when heartbeat-ms
+                             (cancel-heartbeat)
+                             (vreset! heartbeat-thread
+                               (future
+                                 (try
+                                   (while true
+                                     (Thread/sleep heartbeat-ms)
+                                     (queue/heartbeat! queue task-id worker-id))
+                                   (catch Exception _)))))
+                         initial-data (:initial-data (:data task))]
+                     (try
+                       (if-let [session-id (:mycelium/session-id initial-data)]
+                         ;; --- Resume path ---
+                         (if-not (and resume-load resume-save resume-delete)
+                           (queue/fail! queue task-id worker-id
+                             (ex-info "Resume task requires :resume-load/:resume-save/:resume-delete callbacks" {}))
+                           (if-let [halted (resume-load session-id)]
+                             (let [merge-data (:mycelium/merge-data initial-data)
+                                   result (resume-compiled compiled resources halted merge-data)]
+                               (cond
+                                 (error? result)
+                                 (queue/fail! queue task-id worker-id
+                                   (ex-info (str "Resume error: " (:message (workflow-error result)))
+                                            {:result result}))
+
+                                 (:mycelium/resume result)
+                                 (do
+                                   (resume-save session-id result)
+                                   (queue/complete! queue task-id worker-id
+                                     (-> result
+                                         (dissoc :mycelium/resume)
+                                         (assoc :mycelium/session-id session-id))))
+
+                                 :else
+                                 (do
+                                   (resume-delete session-id)
+                                   (queue/complete! queue task-id worker-id result))))
+                             (queue/fail! queue task-id worker-id
+                               (ex-info (str "Resume session not found: " session-id) {}))))
+
+                         ;; --- Normal execution path ---
+                         (let [result (run-compiled compiled resources initial-data)]
+                           (cond
+                             (error? result)
+                             (queue/fail! queue task-id worker-id
+                               (ex-info (str "Workflow error: " (:message (workflow-error result)))
+                                        {:result result}))
+
+                             (:mycelium/resume result)
+                             (if on-halt
+                               (if (queue/claimed? queue task-id worker-id)
+                                 (let [result' (assoc result :mycelium/session-id (str task-id))]
+                                   (queue/complete! queue task-id worker-id (on-halt result')))
+                                 (queue/fail! queue task-id worker-id
+                                   (ex-info "Halted but lease expired before on-halt — may be re-claimed" {})))
+                               (queue/fail! queue task-id worker-id
+                                 (ex-info "Workflow halted but no :on-halt handler configured" {})))
+
+                             :else
+                             (queue/complete! queue task-id worker-id result))))
+                    (catch Exception e
+                      (queue/fail! queue task-id worker-id e))
+                    (finally
+                      (cancel-heartbeat))))
+                   (recur))))
+           ;; No task available — sleep and poll again
+           (do
+             (Thread/sleep poll-ms)
+             (recur))))))))
