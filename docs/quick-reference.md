@@ -972,6 +972,64 @@ Implement the protocol for your persistence backend (DB, Redis, etc.):
 - On re-halt: store updated with new state, same session ID reused
 - Custom session IDs: `(store/run-with-store compiled res data s {:session-id "my-id"})`
 
+## Queue API
+
+Mycelium includes durable queuing for async workflow execution. The default
+in-memory queue is zero-config; swap to Postgres via
+[mycelium-absurd](https://github.com/mycelium-clj/mycelium-absurd).
+
+```clojure
+(require '[mycelium.queue :as q])
+
+;; In-memory queue (default, zero-config)
+(def queue (q/memory-queue))
+(def queue (q/memory-queue {:claim-timeout-ms 300000 :max-attempts 3}))
+
+;; Enqueue → claim → complete cycle
+(def task-id (myc/enqueue-workflow queue :my-wf compiled {:input 1}
+               {:run-at (+ (System/currentTimeMillis) 60000)   ;; schedule
+                :max-attempts 3}))
+(let [task (q/claim! queue "worker-1")]
+  (q/complete! queue (:task-id task) "worker-1" {:ok true}))
+
+;; Worker loop
+(def worker (myc/start-worker queue workflows resources
+              {:poll-ms 500 :heartbeat-ms 60000}))
+
+;; Halt/resume with store
+(require '[mycelium.store :as store])
+(def worker
+  (store/start-worker-with-store queue workflows resources store
+    {:heartbeat-ms 60000}))
+;; On halt: state persisted, session-id = (str task-id), task completed
+;; Resume: (store/resume-with-store compiled resources session-id store)
+
+;; Inspect dead-lettered tasks
+(q/dead-lettered queue)
+
+;; Postgres-backed (mycelium-absurd)
+(require '[mycelium-absurd.core :refer [absurd-queue]])
+(def pg-queue (absurd-queue hikari-ds "my-queue"))
+;; Same API, durable across restarts and distributed workers
+```
+
+| Operation | Description |
+|-----------|-------------|
+| `q/memory-queue` | Create in-memory queue (opts: `:claim-timeout-ms`, `:max-attempts`, `:max-dead-letters`) |
+| `myc/enqueue-workflow` | Submit workflow for async execution (`:run-at` for scheduling) |
+| `q/claim!` | Atomically claim next task with lease |
+| `q/complete!` | Complete task (fenced by worker-id + lease) |
+| `q/fail!` | Fail task, re-queue with backoff (1s, 2s, 4s... capped at 60s) |
+| `q/heartbeat!` | Extend lease for long-running tasks |
+| `q/claimed?` | Check if worker still holds valid claim |
+| `q/queue-depth` | Count pending + claimed tasks |
+| `q/dead-lettered` | Inspect tasks that exhausted all retries |
+| `myc/start-worker` | Start claim→execute→complete/fail loop (opts: `:poll-ms`, `:heartbeat-ms`, `:on-halt`) |
+| `store/start-worker-with-store` | Worker with halt/resume persistence |
+
+Long-running workflows need `:heartbeat-ms` (set to ~1/3 of `:claim-timeout-ms`)
+and idempotent handlers. See [Durable Queues](/docs/durable-queues.html) for details.
+
 ## Workflow Result Keys
 
 | Key | Description |
