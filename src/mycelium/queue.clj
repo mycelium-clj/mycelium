@@ -47,14 +47,22 @@
     "Mark a claimed task as failed.
     Only succeeds if the worker-id matches the current claim holder
     and the lease has not expired. Otherwise it's a no-op.
-    If attempts < max-attempts, the task is re-queued for retry.
+    If attempts < max-attempts, the task is re-queued for retry
+    with exponential backoff (1s, 2s, 4s, ... capped at 60s).
     If attempts exhausted, the task is dead-lettered (removed from queue).
     `error` should be a Throwable or ex-info.")
 
   (heartbeat!
     [queue task-id worker-id]
     "Refresh the claim lease for a running task, preventing expiry.
-    Should be called periodically for long-running tasks.")
+    Only succeeds if the worker-id matches the current claim holder
+    and the lease has not expired. Otherwise it's a no-op.")
+
+  (claimed?
+    [queue task-id worker-id]
+    "Returns true if the task is currently claimed by worker-id
+    and the lease has not expired. Used by workers to guard side
+    effects (e.g., store writes) before completing/failing a task.")
 
   (queue-depth
     [queue]
@@ -75,11 +83,27 @@
 (defn- new-uuid []
   (java.util.UUID/randomUUID))
 
+(defn- backoff-ms
+  "Exponential backoff for retries: 1s, 2s, 4s, 8s, ... capped at 60s."
+  [attempt]
+  (min (* 1000 (long (Math/pow 2 (dec attempt)))) 60000))
+
 (defn memory-queue
   "Creates an in-memory work queue backed by a priority queue.
 
   Tasks are ordered by :run-at (earliest first), then by insertion order.
   No durability — all state is lost on process restart.
+
+  Suitable for development, testing, and single-process deployments.
+  For production durability, provide a custom WorkQueue implementation.
+
+  Implementation notes:
+  - claim! runs an O(n) scan over all tasks to drain expired claims.
+    Acceptable for modest queue sizes; a durable adapter backed by
+    indexed Postgres rows would handle this more efficiently.
+  - Long-running workflows MUST set :heartbeat-ms on the worker and
+    :max-attempts > 1 to avoid premature dead-lettering (default
+    claim-timeout-ms is 5 min, default max-attempts is 1).
 
   Options:
     :claim-timeout-ms — lease timeout in ms (default: 300000 = 5 min)
@@ -88,9 +112,9 @@
   ([]
    (memory-queue {}))
    ([{:keys [claim-timeout-ms max-attempts max-dead-letters]
-      :or {claim-timeout-ms 300000
-           max-attempts 1
-           max-dead-letters 10000}}]
+       :or {claim-timeout-ms 300000
+            max-attempts 1
+            max-dead-letters 10000}}]
     (let [seq-counter (atom 0)
           tasks (atom {})
           dead-letters (atom [])
@@ -102,13 +126,13 @@
                                  (subvec v (- (count v) max-dead-letters))
                                  v)))))
           lock (ReentrantLock.)
-         pq (PriorityBlockingQueue. 64
-              (reify java.util.Comparator
-                (compare [_ a b]
-                  (let [c (compare (:run-at a) (:run-at b))]
-                    (if (zero? c)
-                      (compare (:seq a) (:seq b))
-                      c)))))]
+          pq (PriorityBlockingQueue. 64
+               (reify java.util.Comparator
+                 (compare [_ a b]
+                   (let [c (compare (:run-at a) (:run-at b))]
+                     (if (zero? c)
+                       (compare (:seq a) (:seq b))
+                       c)))))]
      (reify
        WorkQueue
 
@@ -218,28 +242,37 @@
                                             :attempt attempts
                                             :worker-id nil
                                             :claimed-at nil
-                                            :claim-expires-at nil))]
+                                            :claim-expires-at nil
+                                            :run-at (+ (now-ms) (backoff-ms attempts))))]
                      (swap! tasks assoc task-id retried)
                      (.put pq retried))
                    (do
                      (dead-letter! {:task-id       (:task-id task)
-                                     :workflow-name (:workflow-name task)
-                                     :data          (:data task)
-                                     :error         error
-                                     :failed-at     (now-ms)})
+                                    :workflow-name (:workflow-name task)
+                                    :data          (:data task)
+                                    :error         error
+                                    :failed-at     (now-ms)})
                      (swap! tasks dissoc task-id))))))
            (finally
              (.unlock lock))))
 
-       (heartbeat! [_ task-id _worker-id]
+       (heartbeat! [_ task-id worker-id]
          (.lock lock)
          (try
            (when-let [task (get @tasks task-id)]
-             (when (= :claimed (:state task))
+             (when (and (= :claimed (:state task))
+                        (= worker-id (:worker-id task))
+                        (< (now-ms) (:claim-expires-at task)))
                (swap! tasks assoc task-id
                       (assoc task :claim-expires-at (+ (now-ms) claim-timeout-ms)))))
            (finally
              (.unlock lock))))
+
+       (claimed? [_ task-id worker-id]
+         (when-let [task (get @tasks task-id)]
+           (and (= :claimed (:state task))
+                (= worker-id (:worker-id task))
+                (< (now-ms) (:claim-expires-at task)))))
 
        (queue-depth [_]
          (count @tasks))

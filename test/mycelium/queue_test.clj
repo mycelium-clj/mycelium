@@ -40,27 +40,45 @@
           (is (= 0 (q/queue-depth mq)) "Queue empty after completion"))))))
 
 (deftest memory-queue-fail-test
-  (testing "fail! increments attempt and makes task available again"
+  (testing "fail! increments attempt and re-queues with backoff"
     (let [mq (q/memory-queue)]
       (let [task-id (q/enqueue! mq :wf {:x 1} {:max-attempts 3})]
         (let [task (q/claim! mq "w1")]
           (q/fail! mq (:task-id task) "w1" (ex-info "boom" {}))
+          ;; Backoff: 1s for attempt 1 — wait then reclaim
+          (Thread/sleep 1100)
           (let [retried (q/claim! mq "w2")]
-            (is (some? retried) "Task re-queued after failure")
+            (is (some? retried) "Task re-queued after backoff")
             (is (= 1 (:attempt retried)) "Attempt incremented")))))))
+
+(deftest memory-queue-fail-backoff-test
+  (testing "fail! re-queues task with future run-at"
+    (let [mq (q/memory-queue)
+          before-ms (System/currentTimeMillis)]
+      (q/enqueue! mq :wf {:x 1} {:max-attempts 3})
+      (let [task (q/claim! mq "w1")]
+        (q/fail! mq (:task-id task) "w1" (ex-info "boom" {}))
+        ;; Task not claimable immediately — run-at is in the future
+        (is (nil? (q/claim! mq "w2")) "Not claimable during backoff")
+        ;; Wait for backoff to expire
+        (Thread/sleep 2000)
+        (let [retried (q/claim! mq "w3")]
+          (is (some? retried) "Claimable after backoff")
+          (is (= 1 (:attempt retried)) "Attempt incremented"))))))
 
 (deftest memory-queue-fail-max-attempts-test
   (testing "fail! after max-attempts marks task dead"
     (let [mq (q/memory-queue)]
       (let [task-id (q/enqueue! mq :wf {:x 1} {:max-attempts 2})]
-        ;; Attempt 0
         (let [task (q/claim! mq "w1")]
           (q/fail! mq (:task-id task) "w1" (ex-info "boom1" {})))
-        ;; Attempt 1 (final)
+        ;; Wait for backoff, reclaim
+        (Thread/sleep 1100)
         (let [task (q/claim! mq "w2")]
           (is (= 1 (:attempt task)))
           (q/fail! mq (:task-id task) "w2" (ex-info "boom2" {})))
-        ;; No more claims
+        ;; After max-attempts exhausted, task is dead
+        (Thread/sleep 2100) ;; attempt 2 backoff = 2s
         (is (nil? (q/claim! mq "w3")) "Task exhausted retries")
         (is (= 0 (q/queue-depth mq)) "Dead task removed from queue")))))
 
@@ -81,6 +99,34 @@
         (is (some? task))
         (q/heartbeat! mq (:task-id task) "w1")
         (is (= 1 (q/queue-depth mq)))))))
+
+(deftest memory-queue-heartbeat-wrong-worker-is-noop-test
+  (testing "heartbeat! from wrong worker is ignored"
+    (let [mq (q/memory-queue {:claim-timeout-ms 10})]
+      (q/enqueue! mq :wf {:x 1} {:max-attempts 2})
+      (let [task (q/claim! mq "worker-a")]
+        (q/heartbeat! mq (:task-id task) "worker-b")
+        ;; Lease should not be extended — wait past timeout
+        (Thread/sleep 20)
+        (let [reclaimed (q/claim! mq "worker-b")]
+          (is (some? reclaimed) "Task reclaimed — wrong-worker heartbeat was no-op"))))))
+
+(deftest memory-queue-claimed-test
+  (testing "claimed? returns true when lease is valid"
+    (let [mq (q/memory-queue)]
+      (q/enqueue! mq :wf {:x 1})
+      (let [task (q/claim! mq "w1")]
+        (is (q/claimed? mq (:task-id task) "w1") "Owner sees claim as valid")
+        (is (not (q/claimed? mq (:task-id task) "w2")) "Other worker sees claim as invalid")))))
+
+(deftest memory-queue-claimed-expired-test
+  (testing "claimed? returns false after lease expiry"
+    (let [mq (q/memory-queue {:claim-timeout-ms 5})]
+      (q/enqueue! mq :wf {:x 1})
+      (let [task (q/claim! mq "w1")]
+        (is (q/claimed? mq (:task-id task) "w1") "Claim valid initially")
+        (Thread/sleep 10)
+        (is (not (q/claimed? mq (:task-id task) "w1")) "Claim expired")))))
 
 (deftest memory-queue-claim-lease-expiry-test
   (testing "claim! lease expires and task is reclaimable"
@@ -124,9 +170,11 @@
     (let [mq (q/memory-queue)]
       (q/enqueue! mq :wf {:x 1} {:max-attempts 2})
       (let [task (q/claim! mq "worker-a")]
-        (q/fail! mq (:task-id task) "worker-b" (ex-info "not mine" {}))
+        (q/fail! mq (:task-id task) "worker-b"  (ex-info "not mine" {}))
         (is (= 1 (q/queue-depth mq)) "Task still present (wrong-worker fail! was no-op)")
         (q/fail! mq (:task-id task) "worker-a" (ex-info "legit failure" {}))
+        ;; Wait for backoff, then reclaim
+        (Thread/sleep 1100)
         (let [retried (q/claim! mq "worker-a")]
           (is (= 1 (:attempt retried)) "Legit fail! caused re-queue"))))))
 
@@ -171,9 +219,11 @@
     (let [mq (q/memory-queue)]
       (q/enqueue! mq :wf {:x 1} {:max-attempts 2})
       (let [task (q/claim! mq "w1")]
-        (q/fail! mq (:task-id task) "w1" (ex-info "boom1" {}))
-        (let [retried (q/claim! mq "w2")]
-          (q/fail! mq (:task-id retried) "w2" (ex-info "boom2" {}))))
+        (q/fail! mq (:task-id task) "w1" (ex-info "boom1" {})))
+      ;; Wait for backoff, reclaim
+      (Thread/sleep 1100)
+      (let [retried (q/claim! mq "w2")]
+        (q/fail! mq (:task-id retried) "w2" (ex-info "boom2" {})))
       (let [dls (q/dead-lettered mq)]
         (is (= 1 (count dls)) "One dead-lettered entry")
         (is (= :wf (:workflow-name (first dls))))
