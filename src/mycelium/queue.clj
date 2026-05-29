@@ -171,13 +171,14 @@
                           (<= (:claim-expires-at task) (now-ms)))
                  (let [next-attempt (inc (:attempt task))]
                    (if (< next-attempt (:max-attempts task))
-                     ;; Re-queue for retry
+                     ;; Re-queue for retry with exponential backoff
                      (let [updated (-> task
                                        (assoc :state :pending
                                               :worker-id nil
                                               :claimed-at nil
                                               :claim-expires-at nil
-                                              :attempt next-attempt))]
+                                              :attempt next-attempt
+                                              :run-at (+ (now-ms) (backoff-ms next-attempt))))]
                        (swap! tasks assoc tid updated)
                        (.put pq updated))
                      ;; Attempts exhausted — dead letter

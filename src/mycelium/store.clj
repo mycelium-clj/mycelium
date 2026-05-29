@@ -2,7 +2,8 @@
   "Persistence protocol and helpers for halted workflow state.
    Allows workflows to halt, persist their state, and resume later
    (potentially in a different process or after a restart)."
-  (:require [mycelium.core :as myc]))
+  (:require [mycelium.core :as myc]
+            [mycelium.queue :as queue]))
 
 (defprotocol WorkflowStore
   (save-workflow! [store session-id halted-data]
@@ -100,19 +101,25 @@
    `merge-data` — optional map to merge into the data before resuming
      (e.g., human-provided input).
 
-   Returns a UUID task-id. The session-id is (str task-id) — deterministic
-   correlation between the enqueued task and the persisted session.
+   Returns a UUID task-id for the resume task. The persisted state keeps
+   its original `session-id` (the one passed in), not (str task-id) — the
+   resume task reuses the existing session rather than creating a new one.
    The result of the resumed workflow is not returned from this function;
-   use `load-workflow` on completion or inspect the worker's output."
+   use `load-workflow` on completion or inspect the worker's output.
+
+   Note: the resume task carries a control map (:mycelium/session-id,
+   :mycelium/merge-data) rather than workflow input, so it deliberately
+   bypasses `enqueue-workflow`'s start-schema validation — resume re-enters
+   the FSM mid-flight on already-validated data."
   ([queue workflow-name compiled-workflow resources session-id store]
    (enqueue-resume queue workflow-name compiled-workflow resources session-id store nil))
-  ([queue workflow-name compiled-workflow resources session-id store merge-data]
+  ([queue workflow-name _compiled-workflow _resources session-id store merge-data]
    (when-not (load-workflow store session-id)
      (throw (ex-info (str "Workflow session not found: " session-id)
                      {:session-id session-id})))
-   (myc/enqueue-workflow queue workflow-name compiled-workflow
-     {:mycelium/session-id session-id
-      :mycelium/merge-data merge-data})))
+   (queue/enqueue! queue workflow-name
+     {:initial-data {:mycelium/session-id session-id
+                     :mycelium/merge-data merge-data}})))
 
 (defn start-worker-with-store
   "Like `mycelium.core/start-worker`, but with store-backed halt/resume.

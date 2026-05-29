@@ -191,3 +191,39 @@
           (Thread/sleep 500)
           (is (= 0 (q/queue-depth mq)) "Resume task completed")
           (is (nil? (store/load-workflow s session-id)) "Store cleaned up after completion"))))))
+
+(deftest worker-resume-via-queue-with-input-schema-test
+  (testing "enqueue-resume works for a workflow with a top-level :input-schema
+            (resume control map must bypass start-schema validation)"
+    (defmethod cell/cell-spec :qi/schema-step1 [_]
+      {:id :qi/schema-step1
+       :handler (fn [_ data] (assoc data :step1 true :mycelium/halt {:reason :check}))
+       :schema {:input [:map [:name :string]] :output [:map]}})
+    (defmethod cell/cell-spec :qi/schema-step2 [_]
+      {:id :qi/schema-step2
+       :handler (fn [_ data] (assoc data :step2 true))
+       :schema {:input [:map] :output [:map]}})
+
+    (let [mq (q/memory-queue)
+          s  (store/memory-store)
+          compiled (myc/pre-compile
+                     {:cells {:start :qi/schema-step1 :next :qi/schema-step2}
+                      :edges {:start :next, :next :end}
+                      :input-schema [:map [:name :string]]})
+          ;; Enqueue with valid input; first step halts
+          task-id (myc/enqueue-workflow mq :test-wf compiled {:name "alice"})
+          worker (store/start-worker-with-store mq {:test-wf compiled} {} s
+                   {:poll-ms 50})]
+      (is (uuid? task-id))
+      (Thread/sleep 500)
+      (is (= 0 (q/queue-depth mq)) "Task completed after halt")
+      (let [session-id (str task-id)]
+        (is (some? (store/load-workflow s session-id)) "State persisted")
+        ;; Resume must NOT throw despite the workflow's required :input-schema
+        (let [resume-task-id (store/enqueue-resume
+                               mq :test-wf compiled {} session-id s)]
+          (is (uuid? resume-task-id) "Resume returns a task-id (no validation failure)")
+          (Thread/sleep 500)
+          (future-cancel worker)
+          (is (= 0 (q/queue-depth mq)) "Resume task completed")
+          (is (nil? (store/load-workflow s session-id)) "Store cleaned up after completion"))))))

@@ -108,6 +108,9 @@
         (q/heartbeat! mq (:task-id task) "worker-b")
         ;; Lease should not be extended — wait past timeout
         (Thread/sleep 20)
+        ;; First claim drains the expired lease and re-queues with backoff
+        (is (nil? (q/claim! mq "worker-b")) "Not reclaimable during backoff")
+        (Thread/sleep 1100) ;; attempt 1 backoff = 1s
         (let [reclaimed (q/claim! mq "worker-b")]
           (is (some? reclaimed) "Task reclaimed — wrong-worker heartbeat was no-op"))))))
 
@@ -129,14 +132,17 @@
         (is (not (q/claimed? mq (:task-id task) "w1")) "Claim expired")))))
 
 (deftest memory-queue-claim-lease-expiry-test
-  (testing "claim! lease expires and task is reclaimable"
+  (testing "claim! lease expires and task is reclaimable after backoff"
     (let [mq (q/memory-queue {:claim-timeout-ms 1})]
       (q/enqueue! mq :wf {:x 1} {:max-attempts 2})
       (let [task (q/claim! mq "w1")]
         (is (some? task))
         (Thread/sleep 10)
+        ;; First claim drains the expired lease and re-queues with backoff
+        (is (nil? (q/claim! mq "w2")) "Not reclaimable during backoff")
+        (Thread/sleep 1100) ;; attempt 1 backoff = 1s
         (let [reclaimed (q/claim! mq "w2")]
-          (is (some? reclaimed) "Expired task is reclaimable")
+          (is (some? reclaimed) "Expired task reclaimable after backoff")
           (is (= (:task-id task) (:task-id reclaimed)) "Same task reclaimed")
           (is (= 1 (:attempt reclaimed)) "Attempt incremented on reclaim"))))))
 
@@ -147,8 +153,10 @@
       (let [task (q/claim! mq "w1")]
         (is (= 0 (:attempt task)))
         (Thread/sleep 10)
+        (is (nil? (q/claim! mq "w2")) "Not reclaimable during backoff")
+        (Thread/sleep 1100) ;; attempt 1 backoff = 1s
         (let [reclaimed (q/claim! mq "w2")]
-          (is (some? reclaimed) "Reclaimed after first expiry")
+          (is (some? reclaimed) "Reclaimed after first expiry + backoff")
           (is (= 1 (:attempt reclaimed))))
         (Thread/sleep 10)
         (let [gone (q/claim! mq "w3")]
@@ -185,6 +193,9 @@
       (let [task (q/claim! mq "w1")]
         (Thread/sleep 10)
         (q/complete! mq (:task-id task) "w1" {:result "too late"})
+        ;; First claim drains the expired lease and re-queues with backoff
+        (is (nil? (q/claim! mq "w2")) "Not reclaimable during backoff")
+        (Thread/sleep 1100) ;; attempt 1 backoff = 1s
         (let [reclaimed (q/claim! mq "w2")]
           (is (some? reclaimed) "Task reclaimed after stale complete! was no-op")
           (is (= 1 (:attempt reclaimed))
@@ -238,6 +249,8 @@
       (let [task (q/claim! mq "w1")]
         (is (= 0 (:attempt task)))
         (Thread/sleep 10)
+        (is (nil? (q/claim! mq "w2")) "Not reclaimable during backoff")
+        (Thread/sleep 1100) ;; attempt 1 backoff = 1s
         (let [reclaimed (q/claim! mq "w2")]
           (is (= 1 (:attempt reclaimed)))
           (Thread/sleep 10)
