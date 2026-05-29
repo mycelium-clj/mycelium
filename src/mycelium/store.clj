@@ -79,3 +79,26 @@
          (do
            (delete-workflow! store session-id)
            result))))))
+
+(defn start-worker-with-store
+  "Like `mycelium.core/start-worker`, but persists halted workflow state
+   to the store via the :on-halt callback.
+
+   When a workflow halts, the worker saves state to the store,
+   completes the queue task, and exposes a session-id for later
+   resumption via `resume-with-store`.
+
+   `queue` — a WorkQueue implementation.
+   `workflows` — map of {workflow-name => compiled-workflow}.
+   `resources` — resources map passed to workflow handlers.
+   `store` — a WorkflowStore instance.
+   `opts` — passed through to `start-worker` (:worker-id, :poll-ms, :heartbeat-ms)."
+  [queue workflows resources store & {:as opts}]
+  (myc/start-worker queue workflows resources
+    (assoc opts :on-halt
+      (fn [result]
+        (let [session-id (new-session-id)]
+          (save-workflow! store session-id result)
+          (-> result
+              (dissoc :mycelium/resume)
+              (assoc :mycelium/session-id session-id)))))))

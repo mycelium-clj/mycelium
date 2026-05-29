@@ -428,10 +428,13 @@
     :poll-ms        — ms to sleep when queue is empty (default: 1000)
     :heartbeat-ms   — ms between heartbeat! calls during task execution
                       (default: no heartbeat). Set to ~claim-timeout-ms/3
-                      for long-running workflows."
+                      for long-running workflows.
+    :on-halt        — (fn [result] -> result) called when a workflow halts
+                      (returns :mycelium/resume). The returned value is passed
+                      to complete!. Use this to persist halted state."
   ([queue workflows resources]
    (start-worker queue workflows resources {}))
-  ([queue workflows resources {:keys [worker-id poll-ms heartbeat-ms]
+  ([queue workflows resources {:keys [worker-id poll-ms heartbeat-ms on-halt]
                                :or {poll-ms 1000}}]
    (let [worker-id (or worker-id (str (java.util.UUID/randomUUID)))
          heartbeat-thread (volatile! nil)]
@@ -458,10 +461,16 @@
                       initial-data (:initial-data (:data task))]
                   (try
                     (let [result (run-compiled compiled resources initial-data)]
-                      (if (error? result)
+                      (cond
+                        (error? result)
                         (queue/fail! queue task-id worker-id
                           (ex-info (str "Workflow error: " (:message (workflow-error result)))
                                    {:result result}))
+
+                        (and on-halt (:mycelium/resume result))
+                        (queue/complete! queue task-id worker-id (on-halt result))
+
+                        :else
                         (queue/complete! queue task-id worker-id result)))
                  (catch Exception e
                    (queue/fail! queue task-id worker-id e))
