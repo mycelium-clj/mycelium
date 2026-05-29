@@ -4,3 +4,6 @@ target/
 .clj-kondo/
 .lsp/
 *.class
+*.db
+*.db-shm
+*.db-wal

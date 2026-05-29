@@ -8,6 +8,7 @@
             [mycelium.compose :as compose]
             [mycelium.manifest :as manifest]
             [mycelium.middleware :as mw]
+            [mycelium.queue :as queue]
             [mycelium.system :as sys]
             [clojure.set :as set]
             [malli.core :as m]
@@ -387,3 +388,90 @@
   "Returns true if the workflow result contains any error."
   [result]
   (some? (workflow-error result)))
+
+;; --- Queue API ---
+
+(defn enqueue-workflow
+  "Enqueues a workflow for asynchronous execution.
+
+  `queue` — a WorkQueue implementation (e.g., from `mycelium.queue/memory-queue`).
+  `workflow-name` — keyword identifying the workflow (used by worker to look up compiled spec).
+  `compiled-workflow` — pre-compiled workflow (from `pre-compile`). Used only to
+    validate the input schema at enqueue time; the worker looks up the compiled
+    workflow by name from its own registry.
+  `initial-data` — the initial data map for the workflow.
+  `opts` — optional map:
+    :run-at       — epoch-ms when the task becomes available (default: now)
+    :max-attempts — max retries before dead-letter (default: 1)
+
+  Returns a UUID task-id. Use `start-worker` to process enqueued tasks."
+  ([queue workflow-name compiled-workflow initial-data]
+   (enqueue-workflow queue workflow-name compiled-workflow initial-data {}))
+  ([queue workflow-name _compiled-workflow initial-data opts]
+   (queue/enqueue! queue workflow-name
+     {:initial-data initial-data}
+     opts)))
+
+(defn start-worker
+  "Starts a worker loop that claims tasks from the queue and executes them.
+
+  `queue` — a WorkQueue implementation.
+  `workflows` — map of {workflow-name => compiled-workflow}.
+  `resources` — resources map passed to workflow handlers.
+
+  Returns a future that runs the worker loop. The loop continues until
+  the future is cancelled. Each task is claimed, executed, and completed
+  or failed based on the result.
+
+  Options:
+    :worker-id      — string identifying this worker (default: auto-generated)
+    :poll-ms        — ms to sleep when queue is empty (default: 1000)
+    :heartbeat-ms   — ms between heartbeat! calls during task execution
+                      (default: no heartbeat). Set to ~claim-timeout-ms/3
+                      for long-running workflows."
+  ([queue workflows resources]
+   (start-worker queue workflows resources {}))
+  ([queue workflows resources {:keys [worker-id poll-ms heartbeat-ms]
+                               :or {poll-ms 1000}}]
+   (let [worker-id (or worker-id (str (java.util.UUID/randomUUID)))
+         heartbeat-thread (volatile! nil)]
+     (future
+       (loop []
+         (if-let [task (queue/claim! queue worker-id)]
+           (let [wf-name (:workflow-name task)
+                 compiled (get workflows wf-name)
+                 task-id (:task-id task)]
+              (if compiled
+                (let [cancel-heartbeat (fn []
+                                         (when-let [t @heartbeat-thread]
+                                           (future-cancel t)
+                                           (vreset! heartbeat-thread nil)))
+                      _ (when heartbeat-ms
+                          (cancel-heartbeat)
+                          (vreset! heartbeat-thread
+                            (future
+                              (try
+                                (while true
+                                  (Thread/sleep heartbeat-ms)
+                                  (queue/heartbeat! queue task-id worker-id))
+                                (catch Exception _)))))
+                      initial-data (:initial-data (:data task))]
+                  (try
+                    (let [result (run-compiled compiled resources initial-data)]
+                      (if (error? result)
+                        (queue/fail! queue task-id worker-id
+                          (ex-info (str "Workflow error: " (:message (workflow-error result)))
+                                   {:result result}))
+                        (queue/complete! queue task-id worker-id result)))
+                 (catch Exception e
+                   (queue/fail! queue task-id worker-id e))
+                 (finally
+                   (cancel-heartbeat))))
+                (do
+                  (queue/fail! queue task-id worker-id
+                    (ex-info (str "Unknown workflow: " wf-name) {}))))
+            (recur))
+           ;; No task available — sleep and poll again
+           (do
+             (Thread/sleep poll-ms)
+             (recur))))))))
