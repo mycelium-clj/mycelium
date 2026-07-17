@@ -133,7 +133,7 @@
    Optional opts map:
      :strict? — if true (default), requires :on-error on every cell.
                 Set to false to allow missing :on-error (legacy mode)."
-  ([manifest] (validate-manifest manifest {:strict? true}))
+  ([manifest] (validate-manifest manifest {}))
   ([manifest opts]
    (let [{:keys [id cells edges dispatches joins] :as manifest} (expand-pipeline manifest)]
      (when-not id
@@ -158,7 +158,7 @@
        (doseq [[cell-name cell-def] cells]
          (validate-cell-def! cell-name cell-def))
        ;; Validate :on-error declarations
-       (validate-on-error! cells (:strict? opts))
+       (validate-on-error! cells (:strict? opts true))
        ;; Determine join members — cells consumed by joins don't need edges
        (let [joins-map    (or joins {})
              join-members (set (mapcat :cells (vals joins-map)))
