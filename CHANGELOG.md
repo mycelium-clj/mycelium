@@ -99,6 +99,15 @@ surfaced later at workflow compile time.
 The two dialects cannot be mixed: a lite map inside a Malli vector form is
 invalid Malli and is rejected at compile time.
 
+### Fix: `validate-manifest` is strict for every arity
+
+The docstring said `:strict?` (require `:on-error` on every cell) defaults
+to true, but the default only applied to the one-argument call. Passing any
+opts map without `:strict?` silently ran in lenient mode, so
+`(validate-manifest m {})` skipped the `:on-error` check entirely. The
+default now applies whenever `:strict?` is absent. Pass `{:strict? false}`
+explicitly for the lenient behavior.
+
 ## 2026-03-07
 
 ### Unified Error Inspection
