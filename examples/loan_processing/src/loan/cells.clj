@@ -30,10 +30,14 @@
                        [:applicant-name {:optional true} [:maybe :string]]
                        [:income {:optional true} [:maybe number?]]
                        [:loan-amount {:optional true} [:maybe number?]]]
-             :output [:per-transition {:valid   [:map [:validation-status [:= :valid]]]
-                      :invalid [:map
-                                [:validation-status [:= :invalid]]
-                                [:validation-errors [:vector :string]]]}]}})
+              :output [:per-transition {:valid   [:map
+                                     [:applicant-name :string]
+                                     [:income number?]
+                                     [:loan-amount number?]
+                                     [:validation-status [:= :valid]]]
+                       :invalid [:map
+                                 [:validation-status [:= :invalid]]
+                                 [:validation-errors [:vector :string]]]}]}})
 
 ;; ===== Credit Assessment (subworkflow cells) =====
 
