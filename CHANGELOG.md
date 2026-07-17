@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Custom Malli registries
+
+Compilation takes a `:malli/registry` option. Named schemas resolve against
+your registry instead of Malli's global one, so you can use namespaced schema
+references without touching global state or wrapping every schema in
+`m/schema` by hand:
+
+```clojure
+(def registry
+  (mr/composite-registry
+   (m/default-schemas)
+   {:app/id      :uuid
+    :app/request [:map [:id :app/id]]}))
+
+(myc/pre-compile workflow {:malli/registry registry})
+```
+
+One registry at pre-compile covers the whole workflow: cell schemas,
+transform schemas, joins, and the workflow input schema. Manifests,
+generators, composed workflows, and `invoke-cell` take the same option.
+Nothing writes to the global registry, so two workflows in one process can
+use different registries and tests stay isolated.
+
+The registry is baked into each schema at compile time. If you use an
+`mr/mutable-registry`, changes made after compilation don't reach a compiled
+workflow; recompile to pick them up.
+
+Two helpers behind this are now public: `mycelium.schema/compile-schema` and
+`mycelium.schema/compile-cell-schemas`. Both compile raw schema forms against
+a registry and pass already-compiled schemas through untouched.
+
 ### Breaking: per-transition output schemas require explicit `[:per-transition ...]` wrapper
 
 Cells whose downstream edge selection depends on the cell's output

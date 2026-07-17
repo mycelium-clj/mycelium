@@ -6,17 +6,14 @@
             [clojure.set :as set]
             [mycelium.validation :as v]))
 
-;; ===== Fragment validation =====
-
-(defn- validate-cell-def!
-  "Validates a single cell definition within a fragment."
-  [cell-name cell-def]
-  (v/validate-cell-def! cell-name cell-def "Fragment cell"))
-
 (defn validate-fragment
   "Validates a fragment definition. Returns the fragment if valid, throws otherwise.
-   Checks: :entry, :exits, :cells, internal edge consistency."
-  [{:keys [id entry exits cells edges dispatches] :as fragment}]
+   Checks: :entry, :exits, :cells, internal edge consistency.
+   opts:
+     :malli/registry — local Malli registry used to validate cell schemas."
+  ([fragment]
+   (validate-fragment fragment {}))
+  ([{:keys [id entry exits cells edges dispatches] :as fragment} opts]
   (when-not entry
     (throw (ex-info (str "Fragment " (or id "unknown") " missing :entry")
                     {:fragment-id id})))
@@ -33,7 +30,7 @@
                     {:fragment-id id :entry entry})))
   ;; Validate each cell definition
   (doseq [[cell-name cell-def] cells]
-    (validate-cell-def! cell-name cell-def))
+    (v/validate-cell-def! cell-name cell-def "Fragment cell" opts))
   ;; Validate :on-error targets and edge targets
   (let [cell-names    (set (keys cells))
         exit-targets  (set (map #(keyword "_exit" (name %)) exits))
@@ -60,7 +57,7 @@
               (throw (ex-info (str "Fragment " (or id "unknown")
                                    " invalid edge target " target " from " from)
                               {:fragment-id id :from from :target target}))))))))
-  fragment)
+  fragment))
 
 ;; ===== Fragment expansion =====
 
@@ -68,9 +65,13 @@
   "Expands a single fragment into cells, edges, and dispatches.
    host-mapping: {:as :start, :exits {:success :render-dashboard, :failure :render-error}}
    host-cells: existing host cell names (set or map) to check for collisions.
-   Returns {:cells {...} :edges {...} :dispatches {...}}"
-  [fragment host-mapping host-cells]
-  (validate-fragment fragment)
+   Returns {:cells {...} :edges {...} :dispatches {...}}
+   opts:
+     :malli/registry — local Malli registry used to validate cell schemas."
+  ([fragment host-mapping host-cells]
+   (expand-fragment fragment host-mapping host-cells {}))
+  ([fragment host-mapping host-cells opts]
+  (validate-fragment fragment opts)
   (let [{:keys [entry exits cells edges dispatches]} fragment
         {:keys [as exits]} host-mapping
         ;; Validate all fragment exits are wired
@@ -131,7 +132,7 @@
                                   (or dispatches {}))]
     {:cells      expanded-cells
      :edges      expanded-edges
-     :dispatches expanded-dispatches}))
+     :dispatches expanded-dispatches})))
 
 (defn load-fragment
   "Loads a fragment from a resource path. Returns the parsed EDN."
@@ -152,8 +153,12 @@
 (defn expand-all-fragments
   "Expands all :fragments in a manifest, merging them into the manifest's cells/edges/dispatches.
    Each fragment mapping may specify :fragment (inline data) or :ref (resource path).
-   Returns the manifest with fragments expanded and :fragments key removed."
-  [{:keys [fragments cells edges dispatches] :as manifest}]
+   Returns the manifest with fragments expanded and :fragments key removed.
+   opts:
+     :malli/registry — local Malli registry used to validate cell schemas."
+  ([manifest]
+   (expand-all-fragments manifest {}))
+  ([{:keys [fragments cells edges dispatches] :as manifest} opts]
   (if (empty? fragments)
     manifest
     (let [result (reduce (fn [acc [_frag-name frag-mapping]]
@@ -161,7 +166,8 @@
                                  {:keys [as exits]} frag-mapping
                                  expansion (expand-fragment fragment
                                                            {:as as :exits exits}
-                                                           (:cells acc))]
+                                                           (:cells acc)
+                                                           opts)]
                              (-> acc
                                  (update :cells merge (:cells expansion))
                                  (update :edges merge (:edges expansion))
@@ -169,4 +175,4 @@
                          (-> manifest
                              (dissoc :fragments))
                          (sort-by first fragments))]
-      result)))
+     result))))

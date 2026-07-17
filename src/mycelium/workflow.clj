@@ -2,6 +2,7 @@
   "Workflow DSL compiler: transforms workflow definitions into Maestro FSM specs."
   (:require [clojure.set :as set]
             [clojure.string :as str]
+            [malli.core :as m]
             [mycelium.cell :as cell]
             [mycelium.resilience :as resilience]
             [mycelium.schema :as schema]
@@ -35,6 +36,21 @@
   (into {} (map (fn [[cell-name cell-ref]]
                   [cell-name (:id (normalize-cell-ref cell-name cell-ref))]))
         cells))
+
+(defn- resolve-cells
+  "Looks up each cell once and compiles its schemas with `opts`."
+  [cell-ids opts]
+  (update-vals
+   cell-ids
+   (fn [cell-id]
+     (let [cell (cell/get-cell! cell-id)]
+       (try
+         (schema/compile-cell-schemas cell opts)
+         (catch Exception e
+           (throw (ex-info (str "Invalid schema for cell " cell-id ": "
+                                (ex-message e))
+                           {:cell-id cell-id}
+                           e))))))))
 
 (defn- cells->params
   "Extracts a {cell-name → params} map from cells, only for cells with params."
@@ -85,10 +101,10 @@
 ;; ===== Schema key utilities =====
 
 (defn- get-map-keys
-  "Extracts top-level keys from a Malli :map schema. Returns nil if
+  "Extracts top-level keys from a resolved Malli :map schema. Returns nil if
   not a map schema.
 
-  Handles both normalized `[:map [:k v] ...]` and lite syntax `{:k v}`.
+  Dereferences named schemas before reading their map entries.
   Skips Malli property maps (e.g. `{:closed true}` in
   `[:map {:closed true} [:x :int]]`).
 
@@ -97,32 +113,24 @@
   validator uses :include-optional? false when collecting a cell's
   REQUIRED inputs, so that upstream cells aren't forced to produce
   keys the downstream cell has declared optional."
-  ([schema] (get-map-keys schema {}))
+  ([schema]
+   (get-map-keys schema {}))
   ([schema {:keys [include-optional?] :or {include-optional? true}}]
-   (cond
-     ;; Standard Malli vector syntax: [:map [:k1 v1] [:k1 opts v1] ...]
-     (and (vector? schema) (= :map (first schema)))
-     (set (keep (fn [entry]
-                  (when (vector? entry)
-                    (let [k    (first entry)
-                          opts (when (and (= 3 (count entry))
-                                          (map? (second entry)))
-                                 (second entry))]
-                      (when (or include-optional? (not (:optional opts)))
-                        k))))
-                (rest schema)))
-
-     ;; Lite map syntax: {:k1 v1 :k2 v2}. Lite syntax has no
-     ;; per-key optional modifier — every key is required.
-     (map? schema)
-     (set (keys schema)))))
+   (when schema
+     (let [schema (m/deref-all schema)]
+       (when (= :map (m/type schema))
+         (into #{}
+               (keep (fn [[k properties _]]
+                       (when (or include-optional?
+                                 (not (:optional properties)))
+                         k)))
+               (m/children schema)))))))
 
 (defn- get-required-input-keys
   "Required (non-optional) input keys for a cell."
-  [cell-id]
-  (let [cell   (cell/get-cell! cell-id)
-        schema (get-in cell [:schema :input])]
-    (get-map-keys schema {:include-optional? false})))
+  [cell]
+  (get-map-keys (get-in cell [:schema :input])
+                {:include-optional? false}))
 
 (defn- per-transition-output? [output]
   (schema/per-transition? output))
@@ -137,17 +145,16 @@
    transition (or the union across transitions when the transition
    isn't present — handles composed cells where the parent workflow's
    edge labels don't match the composed cell's transitions)."
-  [cell-id transition]
-  (let [cell   (cell/get-cell! cell-id)
-        output (get-in cell [:schema :output])]
+  [cell transition]
+  (let [output (get-in cell [:schema :output])]
     (cond
       (nil? output) nil
 
       (per-transition-output? output)
-      (if-let [schema (get (transitions output) transition)]
-        (get-map-keys schema)
-        (reduce (fn [acc [_ schema]]
-                  (into acc (get-map-keys schema)))
+      (if-let [output-schema (get (transitions output) transition)]
+        (get-map-keys output-schema)
+        (reduce (fn [acc [_ output-schema]]
+                  (into acc (get-map-keys output-schema)))
                 #{}
                 (transitions output)))
 
@@ -156,15 +163,14 @@
 (defn- get-all-output-keys
   "Gets the union of all output keys across all transitions.
    Used for unconditional edges where all transitions route to the same target."
-  [cell-id]
-  (let [cell   (cell/get-cell! cell-id)
-        output (get-in cell [:schema :output])]
+  [cell]
+  (let [output (get-in cell [:schema :output])]
     (cond
       (nil? output) nil
 
       (per-transition-output? output)
-      (reduce (fn [acc [_ schema]]
-                (into acc (get-map-keys schema)))
+      (reduce (fn [acc [_ output-schema]]
+                (into acc (get-map-keys output-schema)))
               #{}
               (transitions output))
 
@@ -172,19 +178,8 @@
 
 (defn- get-join-member-output-keys
   "Gets the union of all output keys from a single join member cell."
-  [cell-id]
-  (let [cell   (cell/get-cell! cell-id)
-        output (get-in cell [:schema :output])]
-    (cond
-      (nil? output) #{}
-
-      (per-transition-output? output)
-      (reduce (fn [acc [_ schema]]
-                (into acc (or (get-map-keys schema) #{})))
-              #{}
-              (transitions output))
-
-      :else (or (get-map-keys output) #{}))))
+  [cell]
+  (or (get-all-output-keys cell) #{}))
 
 ;; ===== Join validation =====
 
@@ -248,8 +243,9 @@
     (when-not (:merge-fn join-def)
       (let [member-cells (:cells join-def)
             cell-key-pairs (mapv (fn [member]
-                                   (let [cell-id (get cells member)]
-                                     [member (get-join-member-output-keys cell-id)]))
+                                   [member
+                                    (get-join-member-output-keys
+                                     (get cells member))])
                                  member-cells)]
         ;; Check for overlapping keys between any pair
         (doseq [i (range (count cell-key-pairs))
@@ -301,7 +297,8 @@
         strategy     (:strategy join-def :parallel)
         merge-fn     (:merge-fn join-def)
         timeout-ms   (:timeout-ms join-def default-async-timeout-ms)
-        member-cells (mapv (fn [m] {:name m :cell (cell/get-cell! (get cells-map m))})
+        member-cells (mapv (fn [member]
+                             {:name member :cell (get cells-map member)})
                            member-names)]
     (fn [resources data]
       (let [snapshot data ;; each branch gets the same snapshot
@@ -346,43 +343,47 @@
         (assoc merged-data :mycelium/join-traces join-traces)))))
 
 (defn- get-map-entries
-  "Extracts top-level entries from a Malli :map schema as a map of {key -> type-schema}.
-   Returns {} if not a :map schema."
+  "Extracts top-level entries from a resolved Malli :map schema.
+   Returns full entries with properties preserved, or [] if not a :map schema."
   [schema]
-  (if (and (vector? schema) (= :map (first schema)))
-    (into {}
-          (keep (fn [entry]
-                  (when (and (vector? entry) (>= (count entry) 2))
-                    [(first entry) (second entry)])))
-          (rest schema))
-    {}))
+  (if schema
+    (let [schema (m/deref-all schema)]
+      (if (= :map (m/type schema))
+        (mapv (fn [[k properties child]]
+                (if properties
+                  [k properties child]
+                  [k child]))
+              (m/children schema))
+        []))
+    []))
 
 (defn- build-join-input-schema
   "Builds a synthesized input schema for a join node.
-   Union of all member cells' input keys with their actual types preserved.
+   Union of all member cells' input entries with their actual types and properties preserved.
    When the same key appears in multiple members with different types,
    the first type encountered wins (they must be compatible for the
    workflow to function correctly)."
   [join-def cells-map]
-  (let [member-names (:cells join-def)
-        all-entries (reduce (fn [acc member]
-                              (let [cell (cell/get-cell! (get cells-map member))
-                                    schema (get-in cell [:schema :input])
-                                    entries (get-map-entries schema)]
-                                ;; merge — first type wins for duplicate keys
-                                (merge entries acc)))
-                            {}
-                            member-names)]
+  (let [all-entries
+        (reduce (fn [acc member]
+                  (let [entries (get-map-entries
+                                 (get-in cells-map
+                                         [member :schema :input]))
+                        entries-by-key (into {}
+                                             (map (juxt first identity))
+                                             entries)]
+                    (merge entries-by-key acc)))
+                {}
+                (:cells join-def))]
     (if (empty? all-entries)
       [:map]
-      (into [:map] (mapv (fn [[k t]] [k t]) all-entries)))))
+      (into [:map] (vals all-entries)))))
 
 (defn- build-join-output-keys
   "Gets the union of all output keys from all join member cells."
   [join-def cells-map]
   (reduce (fn [acc member]
-            (let [cell-id (get cells-map member)]
-              (into acc (get-join-member-output-keys cell-id))))
+            (into acc (get-join-member-output-keys (get cells-map member))))
           #{}
           (:cells join-def)))
 
@@ -486,19 +487,56 @@
           (or dispatches-map {})
           edges-map))
 
+(defn- resolve-schema-form
+  "Normalizes top-level lite syntax and compiles one transform schema."
+  [form opts]
+  (some-> (if (map? form) (schema/normalize-schema form) form)
+          (schema/compile-schema opts)))
+
+(defn- resolve-transform-spec [spec opts]
+  (if-let [schemas (:schema spec)]
+    (assoc spec :schema
+           (reduce (fn [resolved k]
+                     (if (contains? resolved k)
+                       (update resolved k resolve-schema-form opts)
+                       resolved))
+                   schemas
+                   [:input :output]))
+    spec))
+
+(defn- resolve-transforms
+  "Compiles every transform input and output schema once."
+  [transforms opts]
+  (update-vals
+   transforms
+   (fn [transform-def]
+     (update-vals
+      transform-def
+      (fn [entry]
+        (cond
+          (and (map? entry) (contains? entry :fn))
+          (resolve-transform-spec entry opts)
+
+          (map? entry)
+          (update-vals entry #(resolve-transform-spec % opts))
+
+          :else entry))))))
+
 (defn- get-transform-output-keys
   "Extracts output keys from a transform spec's :schema :output, if present."
   [transform-spec]
-  (when-let [schema (get-in transform-spec [:schema :output])]
-    (get-map-keys schema)))
+  (some-> transform-spec
+          (get-in [:schema :output])
+          get-map-keys))
 
 (defn- get-transform-input-keys
   "Extracts required input keys from a transform spec's :schema :input,
    if present. Optional keys are filtered out so the schema-chain
    validator doesn't demand them from upstream producers."
   [transform-spec]
-  (when-let [schema (get-in transform-spec [:schema :input])]
-    (get-map-keys schema {:include-optional? false})))
+  (some-> transform-spec
+          (get-in [:schema :input])
+          (get-map-keys {:include-optional? false})))
 
 (defn- validate-schema-chain!
   "Walks all paths from :start, accumulating output keys.
@@ -513,8 +551,7 @@
    (let [;; Required (non-optional) input keys only. A downstream
          ;; cell that declares `[:k {:optional true} ...]` doesn't
          ;; force upstream cells to produce :k.
-         get-input-keys  (fn [cell-id]
-                           (get-required-input-keys cell-id))
+         get-input-keys get-required-input-keys
          errors (atom [])
          visit  (fn visit [cell-name available-keys visited]
                   (when-not (or (contains? visited cell-name)
@@ -524,14 +561,14 @@
                       (let [member-names (:cells join-def)]
                         ;; Validate each member's input keys against available
                         (doseq [member member-names]
-                          (let [cell-id    (get cells-map member)
-                                input-keys (get-input-keys cell-id)
+                          (let [cell       (get cells-map member)
+                                input-keys (get-input-keys cell)
                                 missing    (when input-keys
                                              (set/difference input-keys available-keys))]
                             (when (seq missing)
                               (swap! errors conj
                                      {:cell-name     member
-                                      :cell-id       cell-id
+                                      :cell-id       (:id cell)
                                       :missing-keys  missing
                                       :available-keys available-keys}))))
                         ;; Accumulate union of all member output keys
@@ -543,7 +580,7 @@
                             (doseq [[_transition target] edge-def]
                               (visit target new-keys (conj visited cell-name))))))
                       ;; Regular cell
-                      (let [cell-id     (get cells-map cell-name)
+                      (let [cell        (get cells-map cell-name)
                             ;; If cell has an input transform, check transform's input keys instead
                             xf-def      (get transforms cell-name)
                             input-xf    (when xf-def
@@ -552,20 +589,20 @@
                                               nil))
                             effective-input-keys (if input-xf
                                                    (get-transform-input-keys input-xf)
-                                                   (get-input-keys cell-id))
+                                                   (get-input-keys cell))
                             missing     (when effective-input-keys
                                           (set/difference effective-input-keys available-keys))]
                         (when (seq missing)
                           (swap! errors conj
                                  {:cell-name     cell-name
-                                  :cell-id       cell-id
+                                  :cell-id       (:id cell)
                                   :missing-keys  missing
                                   :available-keys available-keys}))
                         ;; Traverse edges, using per-transition output keys
                         (let [edge-def (get edges-map cell-name)]
                           (if (keyword? edge-def)
                             ;; Unconditional edge — use union of all output keys
-                            (let [out-keys (get-all-output-keys cell-id)
+                            (let [out-keys (get-all-output-keys cell)
                                   ;; Add output transform keys if present
                                   xf-out-keys (when-let [xf (:output xf-def)]
                                                 (get-transform-output-keys xf))
@@ -575,7 +612,7 @@
                               (visit edge-def new-keys (conj visited cell-name)))
                             ;; Map edges — per-transition output keys
                             (doseq [[transition target] edge-def]
-                              (let [out-keys (get-output-keys-for-transition cell-id transition)
+                              (let [out-keys (get-output-keys-for-transition cell transition)
                                     ;; Add per-edge output transform keys if present
                                     xf-out-keys (when-let [edge-xf (get xf-def transition)]
                                                   (get-transform-output-keys (:output edge-xf)))
@@ -584,13 +621,13 @@
                                                            (or xf-out-keys #{})))]
                                 (visit target new-keys (conj visited cell-name))))))))))]
      ;; Start with :start cell
-     (let [start-cell-id    (get cells-map :start)
-           start-input-keys (when start-cell-id (get-input-keys start-cell-id))
+     (let [start-cell       (get cells-map :start)
+           start-input-keys (when start-cell (get-input-keys start-cell))
            initial-keys     (or start-input-keys #{})
            edge-def         (get edges-map :start)
            xf-def           (get transforms :start)]
        (if (keyword? edge-def)
-         (let [out-keys (get-all-output-keys start-cell-id)
+         (let [out-keys (get-all-output-keys start-cell)
                xf-out-keys (when-let [xf (:output xf-def)]
                              (get-transform-output-keys xf))
                new-keys (into initial-keys
@@ -598,7 +635,7 @@
                                       (or xf-out-keys #{})))]
            (visit edge-def new-keys #{:start}))
          (doseq [[transition target] edge-def]
-           (let [out-keys (get-output-keys-for-transition start-cell-id transition)
+           (let [out-keys (get-output-keys-for-transition start-cell transition)
                  xf-out-keys (when-let [edge-xf (get xf-def transition)]
                                (get-transform-output-keys (:output edge-xf)))
                  new-keys (into initial-keys
@@ -952,83 +989,88 @@
 
 (defn validate-workflow
   "Runs all validations on a workflow definition.
-   Merges :default-dispatches from cell specs as fallback for cells without explicit dispatches."
-  [{:keys [cells edges dispatches joins input-schema pipeline] :as raw-workflow}]
-  (let [{:keys [cells edges dispatches joins input-schema]} (expand-pipeline raw-workflow)]
-    (validate-cells-exist! cells)
-    ;; Validate and expand error groups (must happen before edge/dispatch validation)
-    (let [error-groups (or (:error-groups raw-workflow) {})
-          _            (when (seq error-groups)
-                         (validate-error-groups! error-groups cells))
-          edges        (if (seq error-groups)
-                         (expand-error-group-edges edges error-groups)
-                         edges)
-          dispatches   (if (seq error-groups)
-                         (inject-error-group-dispatches dispatches error-groups edges)
-                         dispatches)]
-      ;; Validate :default edge usage (must not be sole edge)
-      (validate-default-edges! edges)
-      ;; Normalize to {name → cell-id} for all downstream validation
-      (let [cell-ids (cells->ids cells)]
-        ;; Validate :input-schema well-formedness if present
-        (when input-schema
-          (v/validate-malli-schema! input-schema "input-schema"))
-        ;; Validate :resilience policies if present
-        (when-let [resilience (:resilience raw-workflow)]
-          (resilience/validate-resilience! resilience cell-ids))
-        ;; Validate join definitions
-        (let [joins-map (or joins {})]
-          (when (seq joins-map)
-            (validate-join-defs! joins-map cell-ids edges)
-            (validate-join-output-conflicts! joins-map cell-ids))
-          ;; For edge-target and reachability validation, include join names as valid targets
-          (let [cell-names     (set (keys cell-ids))
-                join-names     (set (keys joins-map))
-                join-members   (set (mapcat :cells (vals joins-map)))
-                edge-cell-names (set/difference cell-names join-members)
-                valid-names    (set/union edge-cell-names join-names)]
-            (v/validate-edge-targets! edges valid-names)
-            (v/validate-reachability! edges valid-names))
-          ;; Merge default dispatches — include join default dispatches (filtered to match edge keys)
-          ;; Also auto-inject :default catch-all predicates
-          ;; Join dispatches take priority (merged last) since joins compute their own dispatches
-          (let [timeouts-map        (or (:timeouts raw-workflow) {})
-                with-timeouts      (inject-timeout-dispatches dispatches timeouts-map edges)
-                with-defaults      (inject-default-dispatches with-timeouts edges)
-                join-dispatches    (compute-join-dispatches joins-map edges)
-                effective-dispatches (merge (merge-default-dispatches with-defaults edges cell-ids)
-                                            join-dispatches)]
-            (v/validate-dispatch-coverage! edges effective-dispatches))
-          ;; Validate transforms before schema chain (transforms affect key availability)
-          (when-let [transforms (:transforms raw-workflow)]
-            (validate-transforms! transforms cells edges))
-          (validate-schema-chain! edges cell-ids joins-map (:transforms raw-workflow))
-          ;; Validate graph-level timeouts
-          (when-let [timeouts (:timeouts raw-workflow)]
-            (validate-timeouts! timeouts cells edges))
-          ;; Validate constraints (after all structural validations pass)
-          (when-let [constraints (:constraints raw-workflow)]
-            (validate-constraints! constraints edges)))))))
+   Merges :default-dispatches from cell specs as fallback for cells without explicit dispatches.
+   Returns resolved cell specs keyed by workflow cell name for reuse during compilation.
+   opts:
+     :malli/registry — local Malli registry used to resolve named schemas."
+  ([raw-workflow]
+   (validate-workflow raw-workflow {}))
+  ([raw-workflow opts]
+   (let [{:keys [cells edges dispatches joins input-schema]}
+         (expand-pipeline raw-workflow)]
+     (validate-cells-exist! cells)
+     (let [error-groups (or (:error-groups raw-workflow) {})
+           _            (when (seq error-groups)
+                          (validate-error-groups! error-groups cells))
+           edges        (if (seq error-groups)
+                          (expand-error-group-edges edges error-groups)
+                          edges)
+           dispatches   (if (seq error-groups)
+                          (inject-error-group-dispatches
+                           dispatches error-groups edges)
+                          dispatches)]
+       (validate-default-edges! edges)
+       (let [cell-ids        (cells->ids cells)
+             resolved        (resolve-cells cell-ids opts)
+             joins-map       (or joins {})
+             cell-names      (set (keys cell-ids))
+             join-names      (set (keys joins-map))
+             join-members    (set (mapcat :cells (vals joins-map)))
+             edge-cell-names (set/difference cell-names join-members)
+             valid-names     (set/union edge-cell-names join-names)]
+         (when input-schema
+           (v/validate-malli-schema! input-schema "input-schema" opts))
+         (when-let [resilience (:resilience raw-workflow)]
+           (resilience/validate-resilience! resilience cell-ids))
+         (when (seq joins-map)
+           (validate-join-defs! joins-map cell-ids edges)
+           (validate-join-output-conflicts! joins-map resolved))
+         (v/validate-edge-targets! edges valid-names)
+         (v/validate-reachability! edges valid-names)
+         (let [timeouts-map (or (:timeouts raw-workflow) {})
+               with-timeouts (inject-timeout-dispatches
+                              dispatches timeouts-map edges)
+               with-defaults (inject-default-dispatches with-timeouts edges)
+               join-dispatches (compute-join-dispatches joins-map edges)
+               effective-dispatches
+               (merge (merge-default-dispatches
+                       with-defaults edges cell-ids)
+                      join-dispatches)]
+           (v/validate-dispatch-coverage! edges effective-dispatches))
+         (when-let [transforms (:transforms raw-workflow)]
+           (validate-transforms! transforms cells edges opts))
+         (let [resolved-transforms
+               (some-> (:transforms raw-workflow)
+                       (resolve-transforms opts))]
+           (validate-schema-chain!
+            edges resolved joins-map resolved-transforms))
+         (when-let [timeouts (:timeouts raw-workflow)]
+           (validate-timeouts! timeouts cells edges))
+         (when-let [constraints (:constraints raw-workflow)]
+           (validate-constraints! constraints edges))
+         resolved)))))
 
 ;; ===== Edge transform validation & compilation =====
 
 (defn- validate-transform-spec!
   "Validates a single transform spec {:fn f, :schema {:input [...] :output [...]}}."
-  [cell-name label spec]
+  [cell-name label spec opts]
   (when-not (and (map? spec) (ifn? (:fn spec)))
     (throw (ex-info (str "Transform " label " on cell " cell-name " must be a function (:fn key required)")
                     {:cell-name cell-name :label label :spec spec})))
   (when-let [schema (:schema spec)]
     (when (:input schema)
-      (v/validate-malli-schema! (:input schema) (str "Transform " label " on " cell-name " :input")))
+      (v/validate-malli-schema!
+       (:input schema) (str "Transform " label " on " cell-name " :input") opts))
     (when (:output schema)
-      (v/validate-malli-schema! (:output schema) (str "Transform " label " on " cell-name " :output")))))
+      (v/validate-malli-schema!
+       (:output schema) (str "Transform " label " on " cell-name " :output") opts))))
 
 (defn- validate-transforms!
   "Validates the :transforms map at compile time.
    Each key must be a valid cell name, edge labels must match the cell's edges,
    and transform specs must have :fn (function) and optional :schema."
-  [transforms cells edges]
+  [transforms cells edges opts]
   (let [cell-names (set (keys cells))]
     (doseq [[cell-name transform-def] transforms]
       (when-not (contains? cell-names cell-name)
@@ -1040,7 +1082,7 @@
           (doseq [[k v] transform-def]
             (cond
               (= k :input)
-              (validate-transform-spec! cell-name :input v)
+              (validate-transform-spec! cell-name :input v opts)
 
               (contains? edge-def k)
               (do
@@ -1048,8 +1090,12 @@
                   (throw (ex-info (str "Transform edge " k " on cell " cell-name
                                        " must be a map with :input/:output keys")
                                   {:cell-name cell-name :label k :value v})))
-                (when (:input v) (validate-transform-spec! cell-name (str k " :input") (:input v)))
-                (when (:output v) (validate-transform-spec! cell-name (str k " :output") (:output v))))
+                (when (:input v)
+                  (validate-transform-spec!
+                   cell-name (str k " :input") (:input v) opts))
+                (when (:output v)
+                  (validate-transform-spec!
+                   cell-name (str k " :output") (:output v) opts)))
 
               :else
               (throw (ex-info (str "Transform on cell " cell-name " has invalid edge label " k
@@ -1062,9 +1108,11 @@
                                    ". Unconditional cells only support :input and :output")
                               {:cell-name cell-name :invalid-keys invalid-keys})))
             (when (:input transform-def)
-              (validate-transform-spec! cell-name :input (:input transform-def)))
+              (validate-transform-spec!
+               cell-name :input (:input transform-def) opts))
             (when (:output transform-def)
-              (validate-transform-spec! cell-name :output (:output transform-def)))))))))
+              (validate-transform-spec!
+               cell-name :output (:output transform-def) opts))))))))
 
 (defn- build-transform-maps
   "Builds input and output transform lookup maps from the :transforms workflow key.
@@ -1232,11 +1280,11 @@
    Returns the compiled (ready-to-run) FSM."
   ([workflow] (compile-workflow workflow {}))
   ([raw-workflow opts]
-   (let [{:keys [cells edges dispatches joins] :as workflow} (expand-pipeline raw-workflow)]
-     ;; Validate
-     (validate-workflow workflow)
-     (let [;; Expand error groups (edges + dispatches) before other processing
-           error-groups (or (:error-groups workflow) {})
+   (let [{:keys [cells edges dispatches joins] :as workflow}
+         (expand-pipeline raw-workflow)
+         resolved (validate-workflow workflow opts)
+         ;; Expand error groups before other processing.
+         error-groups (or (:error-groups workflow) {})
            edges        (if (seq error-groups)
                           (expand-error-group-edges edges error-groups)
                           edges)
@@ -1258,16 +1306,18 @@
                                      join-dispatches)
          ;; Build state->cell map for non-join-member cells
          state->cell (into {}
-                           (keep (fn [[cell-name cell-id]]
+                           (keep (fn [[cell-name _]]
                                    (when-not (contains? join-members cell-name)
                                      [(resolve-state-id cell-name)
-                                      (cell/get-cell! cell-id)])))
+                                      (get resolved cell-name)])))
                            cell-ids)
          ;; Build synthetic join cell specs for state->cell
          join-cell-specs (into {}
                                (map (fn [[join-name join-def]]
-                                      (let [handler   (build-join-handler join-name join-def cell-ids)
-                                            in-schema (build-join-input-schema join-def cell-ids)]
+                                      (let [handler (build-join-handler
+                                                     join-name join-def resolved)
+                                            in-schema (build-join-input-schema
+                                                       join-def resolved)]
                                         [(resolve-state-id join-name)
                                          {:id       (keyword "mycelium.join" (name join-name))
                                           :handler  handler
@@ -1277,7 +1327,7 @@
                                joins-map)
          state->cell (merge state->cell join-cell-specs)
          ;; Pre-compile all Malli schemas so interceptors use compiled objects
-         state->cell (schema/pre-compile-schemas state->cell)
+         state->cell (schema/pre-compile-schemas state->cell opts)
          ;; Apply params wrapping for parameterized cells
          state->cell (reduce (fn [acc [cell-name params]]
                                (let [state-id (resolve-state-id cell-name)]
@@ -1330,7 +1380,7 @@
                              joins-map))
          ;; Build Maestro FSM states — non-join-member cells only
          fsm-cell-states (into {}
-                               (keep (fn [[cell-name cell-id]]
+                               (keep (fn [[cell-name _]]
                                        (when-not (contains? join-members cell-name)
                                          (let [state-id  (resolve-state-id cell-name)
                                                cell      (get state->cell state-id)
@@ -1390,4 +1440,4 @@
        (let [names (mapv #(get state->names % %) (:no-path-to-end analysis))]
          (throw (ex-info (str "States with no path to end: " names)
                          {:no-path-to-end names :analysis analysis}))))
-     (fsm/compile spec)))))
+     (fsm/compile spec))))

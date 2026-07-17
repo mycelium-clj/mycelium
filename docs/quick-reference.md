@@ -154,8 +154,24 @@ mentally reconstruct the architecture from.
  :coerce?  true                                    ;; auto-coerce numeric types (int↔double)
  :propagate-keys? false                             ;; disable auto key propagation (on by default)
  :validate :warn                                    ;; :strict (default), :warn, or :off
- :on-trace (fn [entry] ...)}                        ;; callback after each cell completes
+ :on-trace (fn [entry] ...)                         ;; callback after each cell completes
+ :malli/registry app-registry}                      ;; resolve named schemas
 ```
+
+A local registry applies to workflow input schemas, cell schemas, transforms,
+joins, composition, manifests, generators, and `invoke-cell`:
+
+```clojure
+(def compiled
+  (myc/pre-compile workflow-def {:malli/registry app-registry}))
+
+(myc/invoke-cell :app/load resources data
+                 {:malli/registry app-registry})
+```
+
+Compilation captures the registry in each Malli schema object and never changes
+the global registry. Mutating an `mr/mutable-registry` later does not update an
+already-compiled workflow. Recompile to capture registry changes.
 
 ## Accumulating Data Model
 

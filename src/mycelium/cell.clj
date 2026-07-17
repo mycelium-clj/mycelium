@@ -39,38 +39,54 @@
 (defn set-cell-schema!
   "Sets or overwrites the schema for an already-registered cell.
    Normalizes lite syntax, validates Malli, then updates.
-   Throws if the cell is not found or the schema is invalid."
-  [cell-id schema]
-  (when-not (cell-spec cell-id)
-    (throw (ex-info (str "Cell " cell-id " not found in registry")
-                    {:id cell-id})))
-  (let [schema (schema/normalize-cell-schema schema)]
-    (when (:input schema)
-      (v/validate-malli-schema! (:input schema) (str cell-id " :input")))
-    (when (:output schema)
-      (v/validate-output-schema! (:output schema) (str cell-id " :output")))
-    (swap! cell-overrides update cell-id merge {:schema schema})
-    schema))
+   Throws if the cell is not found or the schema is invalid.
+   opts:
+     :malli/registry — local Malli registry used to validate named schemas."
+  ([cell-id schema-map]
+   (set-cell-schema! cell-id schema-map {}))
+  ([cell-id schema-map opts]
+   (when-not (cell-spec cell-id)
+     (throw (ex-info (str "Cell " cell-id " not found in registry")
+                     {:id cell-id})))
+   (let [schema-map (schema/normalize-cell-schema schema-map)]
+     (when (:input schema-map)
+       (v/validate-malli-schema! (:input schema-map)
+                                 (str cell-id " :input")
+                                 opts))
+     (when (:output schema-map)
+       (v/validate-output-schema! (:output schema-map)
+                                  (str cell-id " :output")
+                                  opts))
+     (swap! cell-overrides update cell-id merge {:schema schema-map})
+     schema-map)))
 
 (defn set-cell-meta!
   "Sets metadata overrides (schema, requires) on a registered cell.
    The manifest calls this to inject metadata into cells that were registered
    without schemas/requires. Expects schemas to be pre-normalized.
-   Validates schema is well-formed. Throws if the cell is not found."
-  [cell-id {:keys [schema requires] :as meta-map}]
-  (when-not (cell-spec cell-id)
-    (throw (ex-info (str "Cell " cell-id " not found in registry")
-                    {:id cell-id})))
-  (when schema
-    (when (:input schema)
-      (v/validate-malli-schema! (:input schema) (str cell-id " :input")))
-    (when (:output schema)
-      (v/validate-output-schema! (:output schema) (str cell-id " :output"))))
-  (let [overrides (cond-> {}
-                    schema   (assoc :schema schema)
-                    requires (assoc :requires requires))]
-    (swap! cell-overrides update cell-id merge overrides))
-  meta-map)
+   Validates schema is well-formed. Throws if the cell is not found.
+   opts:
+     :malli/registry — local Malli registry used to validate named schemas."
+  ([cell-id meta-map]
+   (set-cell-meta! cell-id meta-map {}))
+  ([cell-id {:keys [schema requires] :as meta-map} opts]
+   (when-not (cell-spec cell-id)
+     (throw (ex-info (str "Cell " cell-id " not found in registry")
+                     {:id cell-id})))
+   (when schema
+     (when (:input schema)
+       (v/validate-malli-schema! (:input schema)
+                                 (str cell-id " :input")
+                                 opts))
+     (when (:output schema)
+       (v/validate-output-schema! (:output schema)
+                                  (str cell-id " :output")
+                                  opts)))
+   (let [overrides (cond-> {}
+                     schema   (assoc :schema schema)
+                     requires (assoc :requires requires))]
+     (swap! cell-overrides update cell-id merge overrides))
+   meta-map))
 
 (defn list-cells
   "Returns a seq of all registered cell IDs."

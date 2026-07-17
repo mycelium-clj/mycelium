@@ -123,14 +123,15 @@
 (defn- schema-expected-keys
   "Extracts the set of required (non-optional) top-level keys from a :map schema."
   [schema]
-  (when (and schema (= :map (m/type schema)))
-    (into #{}
-          (keep (fn [child]
-                  (let [k    (first child)
-                        opts (when (= 3 (count child)) (second child))]
-                    (when-not (:optional opts)
-                      k))))
-          (m/children schema))))
+  (let [schema (some-> schema m/deref-all)]
+    (when (and schema (= :map (m/type schema)))
+      (into #{}
+            (keep (fn [child]
+                    (let [k    (first child)
+                          opts (when (= 3 (count child)) (second child))]
+                      (when-not (:optional opts)
+                        k))))
+            (m/children schema)))))
 
 (defn- compute-key-diff
   "Computes the difference between schema-expected keys and actual data keys.
@@ -328,39 +329,50 @@
            {:error (build-error-map (:id cell) :output explanation data)}
            {:data coerced}))))))
 
-(defn- compile-schema-value
-  "Compiles a single schema value to a Malli schema object if it's a raw form.
-   Returns the value unchanged if it's already compiled or nil."
-  [schema-val]
-  (cond
-    (nil? schema-val) nil
-    (m/schema? schema-val) schema-val
-    :else (m/schema schema-val)))
+(defn compile-schema
+  "Compiles a Malli schema form, resolving named refs against an optional
+   :malli/registry in opts. Already-compiled schemas and nil pass through."
+  ([schema-val]
+   (compile-schema schema-val {}))
+  ([schema-val opts]
+   (cond
+     (nil? schema-val)      nil
+     (m/schema? schema-val) schema-val
+     :else                  (m/schema
+                             schema-val
+                             (cond-> {}
+                               (:malli/registry opts)
+                               (assoc :registry (:malli/registry opts)))))))
+
+(defn ^:no-doc compile-cell-schemas
+  "Compiles the input and output schemas of one cell spec. Handles nil,
+   single schemas, and per-transition output schemas. Idempotent."
+  [cell opts]
+  (let [input  (get-in cell [:schema :input])
+        output (get-in cell [:schema :output])
+        compiled-output
+        (cond
+          (nil? output)            nil
+          (per-transition? output) [:per-transition
+                                    (update-vals (transitions-map output)
+                                                 #(compile-schema % opts))]
+          :else                    (compile-schema output opts))]
+    (cond-> cell
+      (some? input)           (assoc-in [:schema :input]
+                                        (compile-schema input opts))
+      (some? compiled-output) (assoc-in [:schema :output] compiled-output))))
 
 (defn pre-compile-schemas
   "Pre-compiles all Malli schemas in a state->cell map.
    Converts raw schema forms (vectors, keywords) into compiled Malli schema objects
    so that validate-input/validate-output don't re-parse them on every call.
-   Returns an updated state->cell map with compiled schemas."
-  [state->cell]
-  (into {}
-        (map (fn [[state-id cell]]
-               (let [input  (get-in cell [:schema :input])
-                     output (get-in cell [:schema :output])
-                     compiled-input  (compile-schema-value input)
-                     compiled-output (cond
-                                      (nil? output)            nil
-                                      (per-transition? output) [:per-transition
-                                                                (into {}
-                                                                      (map (fn [[k v]]
-                                                                             [k (compile-schema-value v)]))
-                                                                      (transitions-map output))]
-                                      :else                    (compile-schema-value output))
-                     updated-cell (cond-> cell
-                                    compiled-input  (assoc-in [:schema :input] compiled-input)
-                                    (some? compiled-output) (assoc-in [:schema :output] compiled-output))]
-                 [state-id updated-cell])))
-        state->cell))
+   Returns an updated state->cell map with compiled schemas.
+   opts:
+     :malli/registry — local Malli registry used to resolve named schemas."
+  ([state->cell]
+   (pre-compile-schemas state->cell {}))
+  ([state->cell opts]
+   (update-vals state->cell #(compile-cell-schemas % opts))))
 
 (defn- extract-cell-path
   "Extracts a vector of cell names from the :mycelium/trace in data."
@@ -547,10 +559,16 @@
   "Wraps an async cell's callback to validate output before forwarding.
    If validation fails, calls error-callback with an ex-info.
    For per-transition output schemas, falls back to 'any schema matches' validation
-   since the transition target is not known until dispatch."
-  [cell original-callback error-callback]
-  (fn [data]
-    (if-let [error (validate-output cell data)]
-      (error-callback (ex-info (str "Output validation failed for " (:id cell))
-                               error))
-      (original-callback data))))
+   since the transition target is not known until dispatch.
+   opts:
+     :malli/registry — local Malli registry used to compile cell schemas."
+  ([cell original-callback error-callback]
+   (wrap-async-callback cell original-callback error-callback {}))
+  ([cell original-callback error-callback opts]
+   (let [cell (compile-cell-schemas cell opts)]
+     (fn [data]
+       (if-let [error (validate-output cell data)]
+         (error-callback
+          (ex-info (str "Output validation failed for " (:id cell))
+                   error))
+         (original-callback data))))))

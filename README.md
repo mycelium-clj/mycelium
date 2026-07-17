@@ -209,6 +209,36 @@ Input keys marked `{:optional true}` are excluded from the schema chain's requir
 :input [:map [:a :int] [:b {:optional true} [:maybe :string]]]
 ```
 
+### Local Malli Registries
+
+If your application keeps its schemas in a local registry rather than Malli's
+global one, hand it to Mycelium at compile time:
+
+```clojure
+(require '[malli.core :as m]
+         '[malli.registry :as mr]
+         '[mycelium.core :as myc])
+
+(def app-registry
+  (mr/composite-registry
+   (m/default-schemas)
+   {:app/id      :uuid
+    :app/request [:map [:id :app/id]]}))
+
+(def compiled
+  (myc/pre-compile workflow {:malli/registry app-registry}))
+```
+
+That one option covers the whole workflow: cell schemas, transform schemas,
+joins, and the workflow input schema. Manifests, generators, composed
+workflows, and `invoke-cell` accept it too. Nothing writes to the global
+registry, so two workflows in the same process can use different registries
+without stepping on each other.
+
+The registry is baked into each schema at compile time. If you use an
+`mr/mutable-registry`, changes made after compilation don't reach an
+already-compiled workflow; recompile to pick them up.
+
 ### Resources
 
 External dependencies are injected, never acquired by cells:
