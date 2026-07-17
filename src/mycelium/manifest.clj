@@ -135,17 +135,8 @@
        (throw (ex-info "Manifest missing :cells" {:id id})))
      (when-not edges
        (throw (ex-info "Manifest missing :edges" {:id id})))
-     ;; Resolve :schema :inherit, then normalize lite syntax before validation
+     ;; Resolve :schema :inherit before validation
      (let [cells    (resolve-inherit-schemas cells)
-           cells    (into {}
-                          (map (fn [[cell-name cell-def]]
-                                 (if (or (= :inherit (:schema cell-def))
-                                         (nil? (:schema cell-def)))
-                                   [cell-name cell-def]
-                                   [cell-name (assoc cell-def :schema
-                                                     (schema/normalize-cell-schema
-                                                       (:schema cell-def)))])))
-                          cells)
            manifest (assoc manifest :cells cells)]
        ;; Validate each cell definition
        (doseq [[cell-name cell-def] cells]
@@ -187,10 +178,9 @@
                effective-dispatches (merge join-dispatches (or dispatches {}))]
            (v/validate-dispatch-coverage! edges effective-dispatches))
          (v/validate-reachability! edges valid-names))
-       ;; Validate :input-schema if present (normalize lite syntax first)
+       ;; Validate :input-schema if present
        (when-let [input-schema (:input-schema manifest)]
-         (v/validate-malli-schema!
-          (schema/normalize-schema input-schema) "input-schema" opts))
+         (v/validate-malli-schema! input-schema "input-schema" opts))
        ;; Validate :regions if present
        (when-let [regions (:regions manifest)]
          (validate-regions! regions cells))
@@ -347,7 +337,7 @@
              :edges edges}
       dispatches (assoc :dispatches dispatches)
       (:joins manifest) (assoc :joins (:joins manifest))
-      (:input-schema manifest) (assoc :input-schema (schema/normalize-schema (:input-schema manifest)))
+      (:input-schema manifest) (assoc :input-schema (:input-schema manifest))
       (:interceptors manifest) (assoc :interceptors (:interceptors manifest))
       (:resilience manifest) (assoc :resilience (:resilience manifest))
       (:transforms manifest) (assoc :transforms (:transforms manifest))))))

@@ -6,6 +6,7 @@
             [clojure.string :as str]
             [malli.core :as m]
             [malli.error :as me]
+            [malli.experimental.lite :as l]
             [malli.transform :as mt]
             [maestro.core :as fsm]))
 
@@ -41,79 +42,6 @@
   [output]
   (when (per-transition? output)
     (second output)))
-
-;; ===== Lite schema normalization =====
-
-(defn normalize-schema
-  "Normalizes a schema that may be in lite syntax to standard Malli.
-   - Plain maps become [:map [:k1 v1] [:k2 v2] ...] with values recursively normalized
-   - Vectors are recursed into so nested lite maps inside [:vector {...}] etc. are normalized
-   - Keywords and nil pass through unchanged
-   Examples:
-     {:subtotal :double}             → [:map [:subtotal :double]]
-     {:address {:street :string}}    → [:map [:address [:map [:street :string]]]]
-     [:vector {:x :int :y :string}]  → [:vector [:map [:x :int] [:y :string]]]
-     [:map [:x :int]]                → [:map [:x :int]]
-     :int                            → :int"
-  [schema]
-  (cond
-    (nil? schema) nil
-    (map? schema) (into [:map] (map (fn [[k v]] [k (normalize-schema v)])) schema)
-    (vector? schema) (mapv (fn [element]
-                             (if (and (vector? element)
-                                      (keyword? (first element)))
-                               ;; This is a [:key type] entry — normalize the type
-                               (if (= 2 (count element))
-                                 [(first element) (normalize-schema (second element))]
-                                 ;; 3-element entry: [:key opts type]
-                                 (if (= 3 (count element))
-                                   [(first element) (second element) (normalize-schema (nth element 2))]
-                                   element))
-                               ;; Non-entry element (type tag, property map, or nested schema)
-                               (normalize-schema element)))
-                           schema)
-    :else schema))
-
-(defn normalize-output-schema
-  "Normalizes an output schema:
-    * `[:per-transition {tx schema, ...}]` — each transition's
-      schema is normalized in place; the wrapper is preserved.
-    * `[:map ...]` and other Malli vector schemas — pass through.
-    * `{:k schema, :k2 schema, ...}` — lite map syntax, normalized
-      to `[:map [:k schema] [:k2 schema] ...]`.
-
-  Throws on a malformed `[:per-transition ...]` wrapper (anything
-  other than `[:per-transition {...}]`)."
-  [schema]
-  (cond
-    (nil? schema) nil
-
-    (per-transition? schema)
-    [:per-transition (into {} (map (fn [[k v]] [k (normalize-schema v)]))
-                           (transitions-map schema))]
-
-    (and (vector? schema) (= :per-transition (first schema)))
-    (throw (ex-info
-             (str "Malformed [:per-transition ...] output schema. "
-                  "Expected [:per-transition {transition-label schema, ...}], got: "
-                  (pr-str schema))
-             {:schema schema}))
-
-    (vector? schema) schema
-
-    (map? schema) (normalize-schema schema)
-
-    :else schema))
-
-(defn normalize-cell-schema
-  "Normalizes a cell's :schema map, converting lite syntax to Malli."
-  [schema]
-  (when schema
-    (let [input  (:input schema)
-          output (:output schema)]
-      (cond-> schema
-        input  (assoc :input (normalize-schema input))
-        output (assoc :output (normalize-output-schema output))))))
 
 (def ^:private terminal-states
   #{::fsm/end ::fsm/error ::fsm/halt})
@@ -331,18 +259,19 @@
 
 (defn compile-schema
   "Compiles a Malli schema form, resolving named refs against an optional
-   :malli/registry in opts. Already-compiled schemas and nil pass through."
+   :malli/registry in opts. Already-compiled schemas and nil pass through.
+   Plain maps are malli.experimental.lite syntax and compile through
+   l/schema, so a lite map anywhere a schema is expected just works."
   ([schema-val]
    (compile-schema schema-val {}))
   ([schema-val opts]
    (cond
      (nil? schema-val)      nil
      (m/schema? schema-val) schema-val
-     :else                  (m/schema
-                             schema-val
-                             (cond-> {}
-                               (:malli/registry opts)
-                               (assoc :registry (:malli/registry opts)))))))
+     :else                  (binding [l/*options*
+                                      (when-let [registry (:malli/registry opts)]
+                                        {:registry registry})]
+                              (l/schema schema-val)))))
 
 (defn ^:no-doc compile-cell-schemas
   "Compiles the input and output schemas of one cell spec. Handles nil,
@@ -356,6 +285,12 @@
           (per-transition? output) [:per-transition
                                     (update-vals (transitions-map output)
                                                  #(compile-schema % opts))]
+          (and (vector? output) (= :per-transition (first output)))
+          (throw (ex-info
+                  (str "Malformed [:per-transition ...] output schema. "
+                       "Expected [:per-transition {transition-label schema, ...}], got: "
+                       (pr-str output))
+                  {:schema output}))
           :else                    (compile-schema output opts))]
     (cond-> cell
       (some? input)           (assoc-in [:schema :input]

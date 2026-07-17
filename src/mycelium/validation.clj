@@ -54,7 +54,6 @@
 (defn validate-cell-def!
   "Validates a single cell definition (manifest or fragment).
    Checks :id, :doc, and :schema presence, validates Malli schemas.
-   Expects schemas to be pre-normalized (lite syntax already converted).
    Skips schema validation for :schema :inherit (resolved separately).
    `context` is a string prefix for error messages (e.g. \"Cell\" or \"Fragment cell\").
    opts:

@@ -82,8 +82,9 @@
       (schema/per-transition? output)
       output
 
-      ;; Caller provided a real schema — use it as :success, add :failure
-      (and (not (keyword? output)) (vector? output))
+      ;; Caller provided a real schema (Malli form or lite map) —
+      ;; use it as :success, add :failure
+      (and (not (keyword? output)) (or (vector? output) (map? output)))
       [:per-transition {:success output
                         :failure [:map [:mycelium/error :any]]}]
 
@@ -110,14 +111,13 @@
    `cell-id`  - the ID for the resulting cell
    `workflow`  - workflow definition map {:cells ... :edges ... :dispatches ...}
    `schema`    - {:input [...] :output [...]} for the cell.
-                 Lite map syntax is normalized automatically.
+                 Lite map schemas compile like any other form.
    opts:
      :malli/registry — local Malli registry captured during compilation."
   ([cell-id workflow schema-map]
    (workflow->cell cell-id workflow schema-map {}))
   ([cell-id workflow schema-map opts]
-   (let [schema-map (schema/normalize-cell-schema schema-map)
-         compiled (wf/compile-workflow
+   (let [compiled (wf/compile-workflow
                    workflow
                    (merge opts
                           {:on-error

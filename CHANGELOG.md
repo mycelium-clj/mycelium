@@ -2,7 +2,34 @@
 
 ## Unreleased
 
-### Custom Malli registries
+### Breaking: per-transition output schemas require explicit `[:per-transition ...]` wrapper
+
+Cells whose downstream edge selection depends on the cell's output
+declare a different schema per transition. Pre-1.0 the wrapper was
+implicit — a plain map whose values were all vectors was inferred
+to be per-transition. That heuristic silently misclassified lite
+map output schemas whose values happened to be vector schemas
+(e.g. `{:user/profile [:maybe :map]}` — every value is a vector,
+so it got treated as per-transition with transitions `:user/profile`).
+
+The wrapper is now mandatory:
+
+```clojure
+;; Before — implicit, ambiguous
+:output {:high [:map [:result [:= :high]]]
+         :low  [:map [:result [:= :low]]]}
+
+;; After — explicit
+:output [:per-transition {:high [:map [:result [:= :high]]]
+                          :low  [:map [:result [:= :low]]]}]
+```
+
+Bare map output schemas are now ALWAYS lite-map syntax, never
+per-transition. The migration error message includes the exact
+rewrite for each cell that needs updating. EDN manifest files
+follow the same form.
+
+### Feature: custom Malli registries
 
 Compilation takes a `:malli/registry` option. Named schemas resolve against
 your registry instead of Malli's global one, so you can use namespaced schema
@@ -33,33 +60,6 @@ Two helpers behind this are now public: `mycelium.schema/compile-schema` and
 `mycelium.schema/compile-cell-schemas`. Both compile raw schema forms against
 a registry and pass already-compiled schemas through untouched.
 
-### Breaking: per-transition output schemas require explicit `[:per-transition ...]` wrapper
-
-Cells whose downstream edge selection depends on the cell's output
-declare a different schema per transition. Pre-1.0 the wrapper was
-implicit — a plain map whose values were all vectors was inferred
-to be per-transition. That heuristic silently misclassified lite
-map output schemas whose values happened to be vector schemas
-(e.g. `{:user/profile [:maybe :map]}` — every value is a vector,
-so it got treated as per-transition with transitions `:user/profile`).
-
-The wrapper is now mandatory:
-
-```clojure
-;; Before — implicit, ambiguous
-:output {:high [:map [:result [:= :high]]]
-         :low  [:map [:result [:= :low]]]}
-
-;; After — explicit
-:output [:per-transition {:high [:map [:result [:= :high]]]
-                          :low  [:map [:result [:= :low]]]}]
-```
-
-Bare map output schemas are now ALWAYS lite-map syntax, never
-per-transition. The migration error message includes the exact
-rewrite for each cell that needs updating. EDN manifest files
-follow the same form.
-
 ### Fix: schema-chain validator honors `{:optional true}` on inputs
 
 A cell that declared `[:k {:optional true} <schema>]` in its input
@@ -74,6 +74,15 @@ filters out optional keys when computing a cell's required inputs.
    :output [:map [:done :boolean]]}
   ...)
 ```
+### Fix: schemas are stored verbatim; lite maps compile through Malli itself
+
+Registration used to rewrite schemas, treating any map inside a schema vector
+as lite syntax. That corrupted ordinary Malli property maps: `[:string {:min 5}]`
+became `[:string [:map [:min 5]]]`, which doesn't compile, and the error only
+surfaced later at workflow compile time.
+
+The two dialects cannot be mixed: a lite map inside a Malli vector form is
+invalid Malli and is rejected at compile time.
 
 ## 2026-03-07
 

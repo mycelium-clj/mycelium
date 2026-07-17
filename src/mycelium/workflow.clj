@@ -488,10 +488,9 @@
           edges-map))
 
 (defn- resolve-schema-form
-  "Normalizes top-level lite syntax and compiles one transform schema."
+  "Compiles one transform schema; lite maps compile like any other form."
   [form opts]
-  (some-> (if (map? form) (schema/normalize-schema form) form)
-          (schema/compile-schema opts)))
+  (schema/compile-schema form opts))
 
 (defn- resolve-transform-spec [spec opts]
   (if-let [schemas (:schema spec)]

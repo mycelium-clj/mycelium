@@ -1,7 +1,6 @@
 (ns mycelium.cell
   "Cell registry for Mycelium. Cells are registered via `defmethod cell-spec`."
-  (:require [mycelium.schema :as schema]
-            [mycelium.validation :as v]))
+  (:require [mycelium.validation :as v]))
 
 (defmulti cell-spec
   "Multimethod-backed cell registry. Dispatches on cell-id keyword,
@@ -48,7 +47,7 @@
    (when-not (cell-spec cell-id)
      (throw (ex-info (str "Cell " cell-id " not found in registry")
                      {:id cell-id})))
-   (let [schema-map (schema/normalize-cell-schema schema-map)]
+   (do
      (when (:input schema-map)
        (v/validate-malli-schema! (:input schema-map)
                                  (str cell-id " :input")
@@ -63,7 +62,8 @@
 (defn set-cell-meta!
   "Sets metadata overrides (schema, requires) on a registered cell.
    The manifest calls this to inject metadata into cells that were registered
-   without schemas/requires. Expects schemas to be pre-normalized.
+   without schemas/requires. Schemas are stored verbatim and compiled
+   at workflow boundaries.
    Validates schema is well-formed. Throws if the cell is not found.
    opts:
      :malli/registry — local Malli registry used to validate named schemas."
@@ -134,8 +134,7 @@
         opt-keys    #{:doc :requires :async?}
         raw-schema  (let [s (select-keys opts schema-keys)]
                       (when (seq s) s))
-        schema      (when raw-schema
-                      (schema/normalize-cell-schema raw-schema))
+        schema      raw-schema
         extra       (select-keys opts opt-keys)
         spec        (cond-> {:id cell-id :handler handler-fn :doc (:doc extra)}
                       schema (assoc :schema schema)
