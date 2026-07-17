@@ -80,6 +80,28 @@
                   {:strict? false})]
       (is (= :test/non-strict-wf (:id result))))))
 
+;; ===== 7. Empty/unrelated opts must not silently disable strict validation (#49) =====
+
+(deftest empty-opts-defaults-to-strict-test
+  (testing "Passing an empty opts map keeps strict as the default"
+    (is (thrown-with-msg? Exception #"on-error"
+          (manifest/validate-manifest
+           {:id :test/empty-opts-wf
+            :cells {:start {:id     :test/eo-cell
+                            :doc    "Cell without on-error, empty opts"
+                            :schema {:input [:map] :output [:map]}}}
+            :edges {:start :end}}
+           {}))))
+  (testing "Passing an unrelated opts map keeps strict as the default"
+    (is (thrown-with-msg? Exception #"on-error"
+          (manifest/validate-manifest
+           {:id :test/empty-opts-wf
+            :cells {:start {:id     :test/eo-cell
+                            :doc    "Cell without on-error, unrelated opts"
+                            :schema {:input [:map] :output [:map]}}}
+            :edges {:start :end}}
+           {:some-other-opt true})))))
+
 ;; ===== 6. Non-strict mode with invalid :on-error target still throws =====
 
 (deftest non-strict-invalid-target-still-throws-test
