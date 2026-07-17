@@ -29,6 +29,21 @@ per-transition. The migration error message includes the exact
 rewrite for each cell that needs updating. EDN manifest files
 follow the same form.
 
+### Breaking: schemas stored verbatim; `normalize-*` functions removed
+
+Registration no longer rewrites schemas. `(cell/get-cell :id)` returns
+the schema exactly as written — a lite map like `{:name :string}` stays
+a map and is not converted to `[:map [:name :string]]`. Compilation runs
+lite maps through `malli.experimental.lite` itself, so the two dialects
+can no longer be mixed: a lite map nested inside a Malli vector form is
+invalid Malli and is rejected at compile time.
+
+The custom normalization layer is removed. Three previously public
+functions are gone: `normalize-schema`, `normalize-output-schema`, and
+`normalize-cell-schema`. Compile raw schema forms with
+`compile-schema` / `compile-cell-schemas` instead — both accept a
+`:malli/registry` and pass already-compiled schemas through untouched.
+
 ### Feature: custom Malli registries
 
 Compilation takes a `:malli/registry` option. Named schemas resolve against
