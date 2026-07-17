@@ -1,30 +1,27 @@
 (ns mycelium.compose
   "Hierarchical composition: wrapping workflows as cells for nesting."
-  (:require [mycelium.cell :as cell]
+  (:require [malli.core :as m]
+            [mycelium.cell :as cell]
             [mycelium.schema :as schema]
             [mycelium.workflow :as wf]
             [maestro.core :as fsm]
             [promesa.core :as p]))
 
 (defn- get-map-entries
-  "Extracts top-level entries from a Malli :map schema.
-   Handles both normalized [:map [:k v] ...] and lite syntax {:k v}.
-   Returns a vector of [key type] pairs, or nil if not a map schema."
+  "Extracts top-level entries from a resolved Malli :map schema.
+   Returns full entries with properties preserved, or nil if not a map schema."
   [schema]
-  (cond
-    ;; Standard Malli vector syntax: [:map [:k1 v1] [:k2 v2] ...]
-    (and (vector? schema) (= :map (first schema)))
-    (vec (keep (fn [entry]
-                 (when (vector? entry)
-                   [(first entry) (second entry)]))
-               (rest schema)))
-
-    ;; Lite map syntax: {:k1 v1 :k2 v2}
-    (map? schema)
-    (vec (map (fn [[k v]] [k v]) schema))))
+  (when schema
+    (let [schema (m/deref-all schema)]
+      (when (= :map (m/type schema))
+        (mapv (fn [[k properties child]]
+                (if properties
+                  [k properties child]
+                  [k child]))
+              (m/children schema))))))
 
 (defn- output-entries-for-edge
-  "Extracts [key type] entries from a cell's output schema for edges routing to :end."
+  "Extracts map entries from a cell's output schema for edges routing to :end."
   [output edge-def]
   (cond
     ;; Unconditional edge to :end
@@ -48,16 +45,24 @@
           (get-map-entries output))))))
 
 (defn- collect-end-reaching-output-entries
-  "Walks workflow edges to find cells routing to :end and collects their output entries.
-   Returns a vector of [key type] pairs representing the union of all outputs."
-  [edges cells]
+  "Walks workflow edges to find cells routing to :end and collects their resolved output entries.
+   Returns the union of full entries with properties preserved."
+  [edges cells opts]
   (->> edges
        (mapcat (fn [[cell-name edge-def]]
-                 (when-let [cell (some-> (get cells cell-name) cell/get-cell)]
-                   (some-> (get-in cell [:schema :output])
-                           (output-entries-for-edge edge-def)))))
-       (reduce (fn [m [k t]] (if (contains? m k) m (assoc m k t))) {})
-       vec))
+                 (let [cell-ref (get cells cell-name)
+                       cell-id  (if (map? cell-ref) (:id cell-ref) cell-ref)]
+                   (when-let [cell (some-> (cell/get-cell cell-id)
+                                           (schema/compile-cell-schemas opts))]
+                     (some-> (get-in cell [:schema :output])
+                             (output-entries-for-edge edge-def))))))
+       (reduce (fn [entries entry]
+                 (let [k (first entry)]
+                   (if (contains? entries k)
+                     entries
+                     (assoc entries k entry))))
+               {})
+       vals))
 
 (defn- infer-workflow-output-schema
   "Infers a per-transition output schema for a composed cell, wrapped
@@ -70,20 +75,22 @@
    :success schema. When the caller's schema is the bare :map keyword,
    we infer :success from the child workflow's end-reaching cells, and
    fall back to bare :map when there's nothing to infer."
-  [workflow schema]
+  [workflow schema opts]
   (let [output (:output schema)]
     (cond
       ;; Caller already passed an explicit per-transition wrapper — use it as-is.
       (schema/per-transition? output)
       output
 
-      ;; Caller provided a real schema — use it as :success, add :failure
-      (and (not (keyword? output)) (vector? output))
+      ;; Caller provided a real schema (Malli form or lite map) —
+      ;; use it as :success, add :failure
+      (and (not (keyword? output)) (or (vector? output) (map? output)))
       [:per-transition {:success output
                         :failure [:map [:mycelium/error :any]]}]
 
       :else
-      (let [entries (collect-end-reaching-output-entries (:edges workflow) (:cells workflow))]
+      (let [entries (collect-end-reaching-output-entries
+                     (:edges workflow) (:cells workflow) opts)]
         (if (seq entries)
           [:per-transition {:success (into [:map] entries)
                             :failure [:map [:mycelium/error :any]]}]
@@ -104,43 +111,53 @@
    `cell-id`  - the ID for the resulting cell
    `workflow`  - workflow definition map {:cells ... :edges ... :dispatches ...}
    `schema`    - {:input [...] :output [...]} for the cell.
-                 Lite map syntax is normalized automatically."
-  [cell-id workflow schema]
-  (let [schema (schema/normalize-cell-schema schema)
-        compiled (wf/compile-workflow workflow
-                                      {:on-error (fn [_ fsm-state]
-                                                   (-> (:data fsm-state)
-                                                       (assoc :mycelium/error
-                                                              (or (:error fsm-state)
-                                                                  (get-in fsm-state [:data :mycelium/schema-error])))
-                                                       (assoc :mycelium/child-trace
-                                                              (:trace fsm-state))))
-                                       :on-end (fn [_ fsm-state]
-                                                 (-> (:data fsm-state)
-                                                     (assoc :mycelium/child-trace
-                                                            (:trace fsm-state))))})
-        handler (fn [resources data]
-                  (try
-                    (let [result (fsm/run compiled resources {:data data})]
-                      (if (p/promise? result) @result result))
-                    (catch Exception e
-                      (-> data
-                          (assoc :mycelium/error (ex-message e))))))]
-    {:id                 cell-id
-     :handler            handler
-     ;; Infer per-transition output schema from child workflow's end-reaching cells.
-     ;; If the caller provided a proper [:map ...] vector, that takes precedence.
-     :schema             {:input (:input schema)
-                          :output (infer-workflow-output-schema workflow schema)}
-     :default-dispatches workflow-cell-dispatches}))
+                 Lite map schemas compile like any other form.
+   opts:
+     :malli/registry — local Malli registry captured during compilation."
+  ([cell-id workflow schema-map]
+   (workflow->cell cell-id workflow schema-map {}))
+  ([cell-id workflow schema-map opts]
+   (let [compiled (wf/compile-workflow
+                   workflow
+                   (merge opts
+                          {:on-error
+                           (fn [_ fsm-state]
+                             (-> (:data fsm-state)
+                                 (assoc :mycelium/error
+                                        (or (:error fsm-state)
+                                            (get-in fsm-state
+                                                    [:data :mycelium/schema-error])))
+                                 (assoc :mycelium/child-trace
+                                        (:trace fsm-state))))
+                           :on-end
+                           (fn [_ fsm-state]
+                             (-> (:data fsm-state)
+                                 (assoc :mycelium/child-trace
+                                        (:trace fsm-state))))}))
+         handler (fn [resources data]
+                   (try
+                     (let [result (fsm/run compiled resources {:data data})]
+                       (if (p/promise? result) @result result))
+                     (catch Exception e
+                       (assoc data :mycelium/error (ex-message e)))))]
+     {:id                 cell-id
+      :handler            handler
+      :schema             {:input (:input schema-map)
+                           :output (infer-workflow-output-schema
+                                    workflow schema-map opts)}
+      :default-dispatches workflow-cell-dispatches})))
 
 (defn register-workflow-cell!
   "Creates a workflow-as-cell and registers it in the cell registry.
 
    `cell-id`  - the ID for the resulting cell
    `workflow`  - workflow definition map {:cells ... :edges ... :dispatches ...}
-   `schema`    - {:input [...] :output [...]} for the cell"
-  [cell-id workflow schema]
-  (let [spec (workflow->cell cell-id workflow schema)]
-    (.addMethod cell/cell-spec cell-id (constantly spec))
-    spec))
+   `schema`    - {:input [...] :output [...]} for the cell
+   opts:
+     :malli/registry — local Malli registry captured during compilation."
+  ([cell-id workflow schema-map]
+   (register-workflow-cell! cell-id workflow schema-map {}))
+  ([cell-id workflow schema-map opts]
+   (let [spec (workflow->cell cell-id workflow schema-map opts)]
+     (.addMethod cell/cell-spec cell-id (constantly spec))
+     spec)))

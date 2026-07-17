@@ -19,8 +19,11 @@
      :expected-dispatch   - if set, verifies the matched dispatch label
    Returns:
      {:pass? bool :errors [...] :output {...} :duration-ms n :matched-dispatch kw-or-nil}"
-  [cell-id {:keys [input resources dispatches expected-dispatch] :or {resources {}}}]
-  (let [cell       (cell/get-cell! cell-id)
+  [cell-id {:keys [input resources dispatches expected-dispatch]
+            :or {resources {}}
+            :as opts}]
+  (let [cell       (schema/compile-cell-schemas
+                    (cell/get-cell! cell-id) opts)
         start-time (System/nanoTime)
         ;; Validate input
         input-err  (schema/validate-input cell input)]
@@ -166,25 +169,34 @@
 
 (defn- generate-test-input
   "Generates test input data from a cell's input schema using Malli generators."
-  [cell]
+  [cell opts]
   (try
-    (mg/generate (m/schema (get-in cell [:schema :input])) {:size 3 :seed 42})
+    (mg/generate (schema/compile-schema
+                  (get-in cell [:schema :input]) opts)
+                 {:size 3 :seed 42})
     (catch Exception _
       {})))
 
 (defn workflow-status
   "Reports implementation status across all cells in a manifest.
-   Returns a map with :total, :implemented, :passing, :failing, :pending, :cells."
-  [{:keys [cells]}]
-  (let [cell-statuses
+   Returns a map with :total, :implemented, :passing, :failing, :pending, :cells.
+   opts:
+     :malli/registry — local Malli registry used to generate test data."
+  ([manifest]
+   (workflow-status manifest {}))
+  ([{:keys [cells]} opts]
+   (let [cell-statuses
         (mapv (fn [[cell-name cell-def]]
                 (let [cell-id (:id cell-def)
                       cell    (cell/get-cell cell-id)]
                   (if-not cell
                     {:id cell-id :name cell-name :status :pending}
                     (try
-                      (let [result (test-cell cell-id {:input     (generate-test-input cell)
-                                                       :resources {}})]
+                      (let [result (test-cell
+                                    cell-id
+                                    (assoc opts
+                                           :input (generate-test-input cell opts)
+                                           :resources {}))]
                         {:id     cell-id
                          :name   cell-name
                          :status (if (:pass? result) :passing :failing)
@@ -200,8 +212,8 @@
      :implemented (- (count cell-statuses) (get counts :pending 0))
      :passing     (get counts :passing 0)
      :failing     (get counts :failing 0)
-     :pending     (get counts :pending 0)
-     :cells       cell-statuses}))
+      :pending     (get counts :pending 0)
+      :cells       cell-statuses})))
 
 (defn analyze-workflow
   "Runs Maestro's static analysis on a workflow definition.
@@ -282,25 +294,21 @@
      :cycles         (mapv (fn [cycle] (mapv resolve-name cycle)) (:cycles analysis))}))
 
 (defn- get-map-keys
-  "Extracts top-level key names from a Malli schema. Returns #{} if not a map schema.
-   Handles both [:map [:k v] ...] and lite syntax {:k v}."
+  "Extracts top-level key names from a resolved Malli schema.
+   Returns #{} if the resolved schema is not a map schema."
   [schema]
-  (cond
-    (and (vector? schema) (= :map (first schema)))
-    (set (keep (fn [entry]
-                 (when (vector? entry)
-                   (first entry)))
-               (rest schema)))
-
-    (map? schema)
-    (set (keys schema))
-
-    :else #{}))
+  (if schema
+    (let [schema (m/deref-all schema)]
+      (if (= :map (m/type schema))
+        (into #{} (map first) (m/children schema))
+        #{}))
+    #{}))
 
 (defn- cell-output-keys
   "Returns the union of all output keys for a cell across all transitions."
-  [cell-id]
-  (let [cell   (cell/get-cell cell-id)
+  [cell-id opts]
+  (let [cell   (some-> (cell/get-cell cell-id)
+                       (schema/compile-cell-schemas opts))
         output (when cell (get-in cell [:schema :output]))]
     (cond
       (nil? output) #{}
@@ -314,17 +322,18 @@
 
 (defn- cell-input-keys
   "Returns the set of input keys for a cell."
-  [cell-id]
-  (let [cell (cell/get-cell cell-id)]
+  [cell-id opts]
+  (let [cell (some-> (cell/get-cell cell-id)
+                     (schema/compile-cell-schemas opts))]
     (when cell
       (get-map-keys (get-in cell [:schema :input])))))
 
 (defn- join-output-keys
   "Returns the union of output keys from all member cells of a join."
-  [join-def cells-map]
+  [join-def cells-map opts]
   (reduce (fn [acc member]
             (let [cell-id (get cells-map member)]
-              (set/union acc (cell-output-keys cell-id))))
+              (set/union acc (cell-output-keys cell-id opts))))
           #{}
           (:cells join-def)))
 
@@ -337,8 +346,10 @@
 
    Handles branching by taking the union of available keys from all incoming paths.
    Join nodes: union of all member output keys."
-  [{:keys [cells edges joins] :as _workflow-def}]
-  (let [joins-map (or joins {})
+  ([workflow]
+   (infer-workflow-schema workflow {}))
+  ([{:keys [cells edges joins]} opts]
+   (let [joins-map (or joins {})
         terminal? #{:end :error :halt}
         ;; Accumulate per-cell info via BFS
         result (atom {})
@@ -346,7 +357,7 @@
         available-before (atom {})
         ;; Start cell's input keys are the initial set
         start-cell-id (get cells :start)
-        start-input (or (cell-input-keys start-cell-id) #{})
+        start-input (or (cell-input-keys start-cell-id opts) #{})
         queue (atom [[:start start-input]])]
     (swap! available-before assoc :start start-input)
     (loop []
@@ -360,9 +371,9 @@
               (swap! available-before assoc cell-name merged-avail)
               ;; Compute output keys
               (let [adds (if-let [join-def (get joins-map cell-name)]
-                           (join-output-keys join-def cells)
+                           (join-output-keys join-def cells opts)
                            (let [cell-id (get cells cell-name)]
-                             (cell-output-keys cell-id)))
+                             (cell-output-keys cell-id opts)))
                     after (set/union merged-avail adds)]
                 ;; Record if first visit or if available-before expanded
                 (let [prev-record (get @result cell-name)]
@@ -380,7 +391,7 @@
                           (doseq [[_ target] edge-def]
                             (swap! queue conj [target after])))))))))))
         (recur)))
-    @result))
+     @result)))
 
 ;; ===== Stub generation =====
 

@@ -3,19 +3,11 @@
   (:require [clojure.edn :as edn]
             [clojure.set :as set]
             [clojure.string :as str]
-            [malli.core :as m]
             [malli.generator :as mg]
             [mycelium.cell :as cell]
             [mycelium.fragment :as fragment]
             [mycelium.schema :as schema]
             [mycelium.validation :as v]))
-
-;; ===== Cell definition validation =====
-
-(defn- validate-cell-def!
-  "Validates a single cell definition within a manifest."
-  [cell-name cell-def]
-  (v/validate-cell-def! cell-name cell-def "Cell"))
 
 (defn- resolve-inherit-schemas
   "Resolves :schema :inherit in cell definitions by looking up schemas from cell registry."
@@ -132,7 +124,8 @@
   "Validates a manifest structure. Returns the manifest if valid, throws otherwise.
    Optional opts map:
      :strict? — if true (default), requires :on-error on every cell.
-                Set to false to allow missing :on-error (legacy mode)."
+                 Set to false to allow missing :on-error (legacy mode).
+      :malli/registry — local Malli registry used to validate schemas."
   ([manifest] (validate-manifest manifest {}))
   ([manifest opts]
    (let [{:keys [id cells edges dispatches joins] :as manifest} (expand-pipeline manifest)]
@@ -142,21 +135,12 @@
        (throw (ex-info "Manifest missing :cells" {:id id})))
      (when-not edges
        (throw (ex-info "Manifest missing :edges" {:id id})))
-     ;; Resolve :schema :inherit, then normalize lite syntax before validation
+     ;; Resolve :schema :inherit before validation
      (let [cells    (resolve-inherit-schemas cells)
-           cells    (into {}
-                          (map (fn [[cell-name cell-def]]
-                                 (if (or (= :inherit (:schema cell-def))
-                                         (nil? (:schema cell-def)))
-                                   [cell-name cell-def]
-                                   [cell-name (assoc cell-def :schema
-                                                     (schema/normalize-cell-schema
-                                                       (:schema cell-def)))])))
-                          cells)
            manifest (assoc manifest :cells cells)]
        ;; Validate each cell definition
        (doseq [[cell-name cell-def] cells]
-         (validate-cell-def! cell-name cell-def))
+         (v/validate-cell-def! cell-name cell-def "Cell" opts))
        ;; Validate :on-error declarations
        (validate-on-error! cells (:strict? opts true))
        ;; Determine join members — cells consumed by joins don't need edges
@@ -194,9 +178,9 @@
                effective-dispatches (merge join-dispatches (or dispatches {}))]
            (v/validate-dispatch-coverage! edges effective-dispatches))
          (v/validate-reachability! edges valid-names))
-       ;; Validate :input-schema if present (normalize lite syntax first)
+       ;; Validate :input-schema if present
        (when-let [input-schema (:input-schema manifest)]
-         (v/validate-malli-schema! (schema/normalize-schema input-schema) "input-schema"))
+         (v/validate-malli-schema! input-schema "input-schema" opts))
        ;; Validate :regions if present
        (when-let [regions (:regions manifest)]
          (validate-regions! regions cells))
@@ -213,22 +197,28 @@
 
 (defn load-manifest
   "Loads and validates a manifest from an EDN file path.
-   If the manifest contains :fragments, expands them before validation."
-  [path]
-  (let [content (slurp path)
-        manifest (edn/read-string content)
-        expanded (if (:fragments manifest)
-                   (expand-fragments manifest)
-                   manifest)]
-    (validate-manifest expanded)))
+   If the manifest contains :fragments, expands them before validation.
+   opts:
+     :strict? — require :on-error on every cell.
+     :malli/registry — local Malli registry used to validate schemas."
+  ([path]
+   (load-manifest path {:strict? true}))
+  ([path opts]
+   (let [content  (slurp path)
+         manifest (edn/read-string content)
+         expanded (if (:fragments manifest)
+                    (expand-fragments manifest opts)
+                    manifest)]
+     (validate-manifest expanded opts))))
 
 ;; ===== Cell brief generation =====
 
 (defn- generate-example
   "Generates example data from a Malli schema."
-  [schema]
+  [schema-form opts]
   (try
-    (mg/generate (m/schema schema) {:size 3 :seed 42})
+    (mg/generate (schema/compile-schema schema-form opts)
+                 {:size 3 :seed 42})
     (catch Exception _
       {:example "could not generate"})))
 
@@ -246,19 +236,21 @@
 
 (defn- generate-output-examples
   "Generates output examples. For per-transition schemas, generates one per edge."
-  [output-schema edge-labels]
+  [output-schema edge-labels opts]
   (if-let [transitions (schema/transitions-map output-schema)]
     (into {}
           (map (fn [label]
-                 [label (generate-example (get transitions label))]))
+                 [label (generate-example (get transitions label) opts)]))
           (sort edge-labels))
-    (generate-example output-schema)))
+    (generate-example output-schema opts)))
 
 (defn cell-brief
   "Extracts a self-contained brief for a single cell from a manifest.
    Returns a map with :id, :doc, :schema, :requires, :examples, :prompt."
-  [manifest cell-name]
-  (let [cell-def    (get-in manifest [:cells cell-name])
+  ([manifest cell-name]
+   (cell-brief manifest cell-name {}))
+  ([manifest cell-name opts]
+   (let [cell-def    (get-in manifest [:cells cell-name])
         _           (when-not cell-def
                       (throw (ex-info (str "Cell " cell-name " not found in manifest")
                                       {:cell-name cell-name :manifest-id (:id manifest)})))
@@ -266,8 +258,9 @@
         edge-def    (get-in manifest [:edges cell-name])
         edge-labels (when (map? edge-def) (set (keys edge-def)))
         dispatches  (get-in manifest [:dispatches cell-name])
-        input-ex    (generate-example (:input schema))
-        output-ex   (generate-output-examples (:output schema) edge-labels)
+        input-ex    (generate-example (:input schema) opts)
+        output-ex   (generate-output-examples
+                     (:output schema) edge-labels opts)
         output-section (format-output-schema-section (:output schema) edge-labels)
         example-section (if (schema/per-transition? (:output schema))
                           (str/join "\n\n"
@@ -305,7 +298,7 @@
      :schema      schema
      :requires    (or requires [])
      :examples    {:input input-ex :output output-ex}
-     :prompt      prompt}))
+     :prompt      prompt})))
 
 ;; ===== Manifest → Workflow =====
 
@@ -316,14 +309,18 @@
    - If already registered, applies manifest metadata via `set-cell-meta!`.
    The manifest is the single source of truth for schemas and requires.
    Returns {:cells ... :edges ... :dispatches ...} suitable for `workflow/compile-workflow`."
-  [{:keys [cells edges dispatches] :as manifest}]
-  (let [cells    (resolve-inherit-schemas cells)
+  ([manifest]
+   (manifest->workflow manifest {}))
+  ([{:keys [cells edges dispatches] :as manifest} opts]
+   (let [cells    (resolve-inherit-schemas cells)
         cell-refs (into {}
                         (map (fn [[cell-name cell-def]]
                                (let [{:keys [id schema requires params]} cell-def]
                                  (if (cell/get-cell id)
-                                   (cell/set-cell-meta! id {:schema   schema
-                                                            :requires (or requires [])})
+                                   (cell/set-cell-meta! id
+                                                        {:schema   schema
+                                                         :requires (or requires [])}
+                                                        opts)
                                    (let [stub {:id      id
                                                :handler (fn [_ data] data)
                                                :schema  schema
@@ -340,7 +337,7 @@
              :edges edges}
       dispatches (assoc :dispatches dispatches)
       (:joins manifest) (assoc :joins (:joins manifest))
-      (:input-schema manifest) (assoc :input-schema (schema/normalize-schema (:input-schema manifest)))
+      (:input-schema manifest) (assoc :input-schema (:input-schema manifest))
       (:interceptors manifest) (assoc :interceptors (:interceptors manifest))
       (:resilience manifest) (assoc :resilience (:resilience manifest))
-      (:transforms manifest) (assoc :transforms (:transforms manifest)))))
+      (:transforms manifest) (assoc :transforms (:transforms manifest))))))

@@ -68,13 +68,13 @@
      :on-end   — custom end handler
      :coerce?  — auto-coerce numeric types (int↔double)
      :propagate-keys? — auto-merge input keys into handler output (default true)
-     :on-trace — callback (fn [trace-entry]) called after each cell completes"
+     :on-trace — callback (fn [trace-entry]) called after each cell completes
+     :malli/registry — local Malli registry captured during compilation"
   ([workflow-def] (pre-compile workflow-def {}))
   ([workflow-def opts]
    (let [compiled-fsm (compile-workflow workflow-def opts)
          input-schema-raw (:input-schema workflow-def)
-         input-schema-compiled (when input-schema-raw
-                                 (m/schema input-schema-raw))]
+         input-schema-compiled (schema/compile-schema input-schema-raw opts)]
      {:compiled-fsm         compiled-fsm
       :input-schema-raw     input-schema-raw
       :input-schema-compiled input-schema-compiled})))
@@ -167,7 +167,8 @@
      :on-end   — custom end handler
      :coerce?  — auto-coerce numeric types (int↔double)
      :propagate-keys? — auto-merge input keys into handler output (default true)
-     :on-trace — callback (fn [trace-entry]) called after each cell completes"
+     :on-trace — callback (fn [trace-entry]) called after each cell completes
+     :malli/registry — local Malli registry captured during compilation"
   ([workflow-def]
    (run-workflow workflow-def {} {} {}))
   ([workflow-def resources]
@@ -179,7 +180,8 @@
 
 (defn run-workflow-async
   "Like run-workflow but returns a future. Deref to get the final data map.
-   For repeated execution, use `pre-compile` + `run-compiled-async` instead."
+   For repeated execution, use `pre-compile` + `run-compiled-async` instead.
+   opts are passed to `run-workflow`."
   ([workflow-def]
    (run-workflow-async workflow-def {} {} {}))
   ([workflow-def resources]
@@ -221,16 +223,22 @@
                 :off skips :requires + schema checks; only the
                 cell-not-found check still fires (since the lookup is
                 needed to find the handler).
+    :malli/registry — local Malli registry used to compile cell schemas.
 
   Naming follows the rest of the Mycelium API (pre-compile, dev/test-cell)
   which uses plain `:validate` with keyword values rather than `:validate?`."
   ([cell-id resources data]
    (invoke-cell cell-id resources data {}))
-  ([cell-id resources data {:keys [validate] :or {validate :strict}}]
+  ([cell-id resources data {:keys [validate]
+                            :or {validate :strict}
+                            :as opts}]
    (let [cell (or (cell/get-cell cell-id)
                   (throw (ex-info (str "Cell not found in registry: " cell-id)
                                   {:type     :mycelium.invoke-cell/cell-not-found
-                                   :cell-id  cell-id})))]
+                                   :cell-id  cell-id})))
+         cell (if (= :strict validate)
+                (schema/compile-cell-schemas cell opts)
+                cell)]
      (when (= :strict validate)
        ;; :requires check
        (when-let [reqs (seq (:requires cell))]

@@ -1,5 +1,7 @@
 (ns mycelium.lite-schema-test
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
+            [malli.core :as m]
+            [malli.registry :as mr]
             [mycelium.cell :as cell]
             [mycelium.core :as myc]
             [mycelium.manifest :as manifest]
@@ -7,105 +9,64 @@
 
 (use-fixtures :each (fn [f] (cell/clear-registry!) (f)))
 
-;; ===== 1. normalize-schema: basic lite map conversion =====
+;; ===== 1. compile-schema: lite maps compile via malli's lite syntax =====
 
-(deftest normalize-schema-basic-test
-  (testing "Converts {key type} map to [:map [key type] ...]"
+(deftest compile-schema-lite-test
+  (testing "Plain maps compile as [:map ...] via malli.experimental.lite"
     (is (= [:map [:subtotal :double] [:state :string]]
-           (schema/normalize-schema {:subtotal :double :state :string}))))
+           (m/form (schema/compile-schema {:subtotal :double :state :string})))))
 
-  (testing "Nested maps are recursively converted"
+  (testing "Nested maps compile recursively"
     (is (= [:map [:address [:map [:street :string] [:city :string]]]]
-           (schema/normalize-schema {:address {:street :string :city :string}}))))
+           (m/form (schema/compile-schema {:address {:street :string :city :string}})))))
 
-  (testing "Vector schemas pass through unchanged"
+  (testing "Vector values inside lite maps are Malli and compile as-is"
+    (is (= [:map [:items [:vector :string]] [:count :int]]
+           (m/form (schema/compile-schema {:items [:vector :string] :count :int})))))
+
+  (testing "Malli forms compile unchanged"
     (is (= [:map [:x :int]]
-           (schema/normalize-schema [:map [:x :int]]))))
-
-  (testing "Keyword schemas pass through unchanged"
-    (is (= :int (schema/normalize-schema :int))))
+           (m/form (schema/compile-schema [:map [:x :int]])))))
 
   (testing "nil passes through"
-    (is (nil? (schema/normalize-schema nil))))
+    (is (nil? (schema/compile-schema nil))))
 
-  (testing "Compound type values (vectors) pass through as values"
-    (is (= [:map [:items [:vector :string]] [:count :int]]
-           (schema/normalize-schema {:items [:vector :string] :count :int})))))
+  (testing "Already-compiled schemas pass through identically"
+    (let [c (schema/compile-schema {:x :int})]
+      (is (identical? c (schema/compile-schema c)))))
 
-;; ===== 2. normalize-output-schema: dispatched vs single =====
+  (testing "Lite maps resolve values against a local registry"
+    (let [reg (mr/composite-registry (m/default-schemas) {:test/id :uuid})
+          c   (schema/compile-schema {:id :test/id} {:malli/registry reg})]
+      (is (true? (m/validate c {:id (random-uuid)})))
+      (is (false? (m/validate c {:id "not-a-uuid"}))))))
 
-(deftest normalize-output-schema-test
-  (testing "Map output is normalized as lite syntax"
-    (is (= [:map [:tax :double]]
-           (schema/normalize-output-schema {:tax :double}))))
+;; ===== 2. Registration stores schemas verbatim =====
 
-  (testing "Explicit per-transition wrapper normalizes each transition value"
-    (is (= [:per-transition {:success [:map [:result :string]]
-                             :failure [:map [:error :string]]}]
-           (schema/normalize-output-schema
-            [:per-transition {:success {:result :string}
-                              :failure {:error  :string}}]))))
-
-  (testing "Per-transition wrapper with already-normalized Malli vectors passes through"
-    (is (= [:per-transition {:high [:map [:result [:= :high]]]
-                             :low  [:map [:result [:= :low]]]}]
-           (schema/normalize-output-schema
-            [:per-transition {:high [:map [:result [:= :high]]]
-                              :low  [:map [:result [:= :low]]]}]))))
-
-  (testing "Plain map output is always lite syntax, even when values are vectors"
-    (is (= [:map
-            [:high [:map [:result [:= :high]]]]
-            [:low  [:map [:result [:= :low]]]]]
-           (schema/normalize-output-schema
-            {:high [:map [:result [:= :high]]]
-             :low  [:map [:result [:= :low]]]}))))
-
-  (testing "Malformed [:per-transition ...] wrapper is rejected"
-    (is (thrown-with-msg? Exception #"Malformed \[:per-transition"
-          (schema/normalize-output-schema [:per-transition]))))
-
-  (testing "Vector output passes through"
-    (is (= [:map [:x :int]]
-           (schema/normalize-output-schema [:map [:x :int]]))))
-
-  (testing "nil output passes through"
-    (is (nil? (schema/normalize-output-schema nil)))))
-
-;; ===== 3. defcell with lite syntax =====
-
-(deftest defcell-lite-schema-test
-  (testing "defcell normalizes lite input schema"
-    (cell/defcell :test/lite-input
-      {:doc    "Sums x and y"
-       :input {:x :int :y :int}
-       :output [:map [:sum :int]]}
-      (fn [_ data] {:sum (+ (:x data) (:y data))}))
-    (let [spec (cell/get-cell :test/lite-input)]
-      (is (= [:map [:x :int] [:y :int]]
-             (get-in spec [:schema :input])))))
-
-  (testing "defcell normalizes lite output schema"
-    (cell/defcell :test/lite-output
-      {:doc    "Doubles x"
-       :input [:map [:x :int]]
-       :output {:doubled :int}}
-      (fn [_ data] {:doubled (* 2 (:x data))}))
-    (let [spec (cell/get-cell :test/lite-output)]
-      (is (= [:map [:doubled :int]]
-             (get-in spec [:schema :output])))))
-
-  (testing "defcell normalizes both input and output lite schemas"
+(deftest defcell-stores-schemas-verbatim-test
+  (testing "Lite input and output schemas are stored as written"
     (cell/defcell :test/lite-both
       {:doc    "Increments x into y"
        :input  {:x :int}
        :output {:y :int}}
       (fn [_ data] {:y (inc (:x data))}))
     (let [spec (cell/get-cell :test/lite-both)]
-      (is (= [:map [:x :int]] (get-in spec [:schema :input])))
-      (is (= [:map [:y :int]] (get-in spec [:schema :output])))))
+      (is (= {:x :int} (get-in spec [:schema :input])))
+      (is (= {:y :int} (get-in spec [:schema :output])))))
 
-  (testing "defcell with explicit per-transition output is preserved"
+  (testing "Malli property maps are stored as written"
+    (cell/defcell :test/bounded-email
+      {:doc    "Validates a bounded email"
+       :input  [:map [:email [:string {:min 5}]]]
+       :output [:map {:closed true} [:ok :boolean]]}
+      (fn [_ _] {:ok true}))
+    (let [spec (cell/get-cell :test/bounded-email)]
+      (is (= [:map [:email [:string {:min 5}]]]
+             (get-in spec [:schema :input])))
+      (is (= [:map {:closed true} [:ok :boolean]]
+             (get-in spec [:schema :output])))))
+
+  (testing "Explicit per-transition output is stored as written"
     (cell/defcell :test/per-transition
       {:doc    "Classifies x as high or low"
        :input  {:x :int}
@@ -115,37 +76,28 @@
         {:result (if (> (:x data) 10) :high :low)}))
     (let [output (get-in (cell/get-cell :test/per-transition) [:schema :output])]
       (is (= :per-transition (first output)))
-      (is (= #{:high :low} (set (keys (second output))))))))
+      (is (= #{:high :low} (set (keys (second output)))))))
 
-;; ===== 4. set-cell-schema! with lite syntax =====
-
-(deftest set-cell-schema-lite-test
-  (testing "set-cell-schema! normalizes lite schemas"
+  (testing "set-cell-schema! stores lite schemas as written"
     (cell/defcell :test/schema-override
       {:doc "Increments x into y"}
       (fn [_ data] {:y (inc (:x data))}))
     (cell/set-cell-schema! :test/schema-override
                            {:input {:x :int} :output {:y :int}})
     (let [spec (cell/get-cell :test/schema-override)]
-      (is (= [:map [:x :int]] (get-in spec [:schema :input])))
-      (is (= [:map [:y :int]] (get-in spec [:schema :output]))))))
+      (is (= {:x :int} (get-in spec [:schema :input])))
+      (is (= {:y :int} (get-in spec [:schema :output]))))))
 
-;; ===== 5. set-cell-meta! receives pre-normalized schemas from manifest =====
+;; ===== 3. Malformed per-transition wrapper is rejected at compile =====
 
-(deftest set-cell-meta-normalized-test
-  (testing "set-cell-meta! works with pre-normalized lite schemas"
-    (cell/defcell :test/meta-override
-      {:doc "Passthrough cell for meta override testing"}
-      (fn [_ data] data))
-    ;; Simulate what manifest->workflow does: normalize first, then set-cell-meta!
-    (let [normalized (schema/normalize-cell-schema
-                       {:input {:name :string} :output {:greeting :string}})]
-      (cell/set-cell-meta! :test/meta-override {:schema normalized})
-      (let [spec (cell/get-cell :test/meta-override)]
-        (is (= [:map [:name :string]] (get-in spec [:schema :input])))
-        (is (= [:map [:greeting :string]] (get-in spec [:schema :output])))))))
+(deftest malformed-per-transition-test
+  (testing "A bad [:per-transition ...] wrapper throws with a helpful message"
+    (is (thrown-with-msg? Exception #"Malformed \[:per-transition"
+          (schema/compile-cell-schemas
+           {:id :test/bad :schema {:output [:per-transition]}}
+           {})))))
 
-;; ===== 6. End-to-end: workflow with lite schemas runs correctly =====
+;; ===== 4. End-to-end: workflows with lite schemas =====
 
 (deftest lite-schema-workflow-e2e-test
   (testing "Workflow runs with lite schemas in defcell"
@@ -187,7 +139,36 @@
                      {} {:x "not-an-int" :y 5} {:on-error on-error})]
       (is (some? (myc/workflow-error result))))))
 
-;; ===== 7. Manifest loading with lite schemas =====
+;; ===== 5. End-to-end: Malli property maps =====
+
+(deftest property-map-workflow-e2e-test
+  (testing "Workflow runs with a property-carrying input schema"
+    (cell/defcell :test/min-length
+      {:doc    "Echoes a name at least three characters long"
+       :input  [:map [:name [:string {:min 3}]]]
+       :output {:seen :string}}
+      (fn [_ data] {:seen (:name data)}))
+    (let [workflow {:cells {:start :test/min-length}
+                    :edges {:start :end}}
+          ok        (myc/run-workflow workflow {} {:name "Alice"})
+          too-short (myc/run-workflow workflow {} {:name "Al"}
+                                      {:on-error (fn [_ fsm-state] (:data fsm-state))})]
+      (is (nil? (myc/workflow-error ok)))
+      (is (= "Alice" (:seen ok)))
+      (is (some? (myc/workflow-error too-short)))))
+
+  (testing "Lite maps inside Malli vector forms are rejected by Malli at compile"
+    ;; The two dialects cannot be mixed; every mixed form is invalid Malli.
+    (cell/defcell :test/mixed
+      {:doc    "Mixes dialects illegally"
+       :input  :map
+       :output [:vector {:x :int}]}
+      (fn [_ data] data))
+    (is (thrown? Exception
+          (myc/pre-compile {:cells {:start :test/mixed}
+                            :edges {:start :end}})))))
+
+;; ===== 6. Manifest loading with lite schemas =====
 
 (deftest manifest-lite-schema-test
   (testing "Manifest with lite schemas validates via manifest->workflow"
@@ -202,15 +183,13 @@
                               :on-error nil}}
              :edges {:start :end}
              :input-schema {:x :int}}
-          ;; validate-manifest normalizes lite schemas
           validated (manifest/validate-manifest m {:strict? true})
-          ;; manifest->workflow injects schemas into cells
           wf-def   (manifest/manifest->workflow validated)
           result   (myc/run-workflow wf-def {} {:x 5})]
       (is (nil? (myc/workflow-error result)))
       (is (= 10 (:result result)))))
 
-  (testing "Manifest with per-transition lite schemas normalizes correctly"
+  (testing "Manifest with per-transition lite schemas works end to end"
     (cell/defcell :test/branch
       {:doc "Classifies x as positive or negative"}
       (fn [_ data]
@@ -230,7 +209,6 @@
                                   [:negative (fn [d] (= :negative (:sign d)))]]}}
           validated (manifest/validate-manifest m {:strict? true})
           wf-def   (manifest/manifest->workflow validated)]
-      ;; Per-transition output with lite values should work
       (let [result (myc/run-workflow wf-def {} {:x 5})]
         (is (nil? (myc/workflow-error result)))
         (is (= :positive (:sign result)))))))

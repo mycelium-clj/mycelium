@@ -29,6 +29,37 @@ per-transition. The migration error message includes the exact
 rewrite for each cell that needs updating. EDN manifest files
 follow the same form.
 
+### Feature: custom Malli registries
+
+Compilation takes a `:malli/registry` option. Named schemas resolve against
+your registry instead of Malli's global one, so you can use namespaced schema
+references without touching global state or wrapping every schema in
+`m/schema` by hand:
+
+```clojure
+(def registry
+  (mr/composite-registry
+   (m/default-schemas)
+   {:app/id      :uuid
+    :app/request [:map [:id :app/id]]}))
+
+(myc/pre-compile workflow {:malli/registry registry})
+```
+
+One registry at pre-compile covers the whole workflow: cell schemas,
+transform schemas, joins, and the workflow input schema. Manifests,
+generators, composed workflows, and `invoke-cell` take the same option.
+Nothing writes to the global registry, so two workflows in one process can
+use different registries and tests stay isolated.
+
+The registry is baked into each schema at compile time. If you use an
+`mr/mutable-registry`, changes made after compilation don't reach a compiled
+workflow; recompile to pick them up.
+
+Two helpers behind this are now public: `mycelium.schema/compile-schema` and
+`mycelium.schema/compile-cell-schemas`. Both compile raw schema forms against
+a registry and pass already-compiled schemas through untouched.
+
 ### Fix: schema-chain validator honors `{:optional true}` on inputs
 
 A cell that declared `[:k {:optional true} <schema>]` in its input
@@ -43,6 +74,15 @@ filters out optional keys when computing a cell's required inputs.
    :output [:map [:done :boolean]]}
   ...)
 ```
+### Fix: schemas are stored verbatim; lite maps compile through Malli itself
+
+Registration used to rewrite schemas, treating any map inside a schema vector
+as lite syntax. That corrupted ordinary Malli property maps: `[:string {:min 5}]`
+became `[:string [:map [:min 5]]]`, which doesn't compile, and the error only
+surfaced later at workflow compile time.
+
+The two dialects cannot be mixed: a lite map inside a Malli vector form is
+invalid Malli and is rejected at compile time.
 
 ## 2026-03-07
 

@@ -3,22 +3,27 @@
    Provides schema well-formedness checks, edge target validation,
    BFS reachability, and dispatch coverage verification."
   (:require [clojure.set :as set]
-            [malli.core :as m]))
+            [mycelium.schema :as schema]))
 
 ;; ===== Schema well-formedness =====
 
 (defn validate-malli-schema!
   "Validates that a Malli schema definition is well-formed.
    Returns nil on success, throws on invalid schema.
-   `label` is included in the error message for diagnostics."
-  [schema label]
-  (try
-    (m/schema schema)
-    nil
-    (catch Exception e
-      (throw (ex-info (str "Invalid Malli schema for " label ": " (ex-message e))
-                      {:label label :schema schema}
-                      e)))))
+   `label` is included in the error message for diagnostics.
+   opts:
+     :malli/registry — local Malli registry used to resolve named schemas."
+  ([schema-form label]
+   (validate-malli-schema! schema-form label {}))
+  ([schema-form label opts]
+   (try
+     (schema/compile-schema schema-form opts)
+     nil
+     (catch Exception e
+       (throw (ex-info (str "Invalid Malli schema for " label ": "
+                            (ex-message e))
+                       {:label label :schema schema-form}
+                       e))))))
 
 (defn- per-transition-output?
   "True when `output-schema` is in explicit per-transition form.
@@ -33,39 +38,53 @@
 (defn validate-output-schema!
   "Validates an output schema: either a single Malli schema, or an
    explicit per-transition wrapper [:per-transition {tx schema, ...}]
-   whose inner values are each Malli schemas."
-  [output-schema label]
-  (if (per-transition-output? output-schema)
-    (doseq [[k v] (second output-schema)]
-      (validate-malli-schema! v (str label " transition " k)))
-    (validate-malli-schema! output-schema label)))
+   whose inner values are each Malli schemas.
+   opts:
+     :malli/registry — local Malli registry used to resolve named schemas."
+  ([output-schema label]
+   (validate-output-schema! output-schema label {}))
+  ([output-schema label opts]
+   (if (per-transition-output? output-schema)
+     (doseq [[k v] (second output-schema)]
+       (validate-malli-schema! v (str label " transition " k) opts))
+     (validate-malli-schema! output-schema label opts))))
 
 ;; ===== Cell definition validation =====
 
 (defn validate-cell-def!
   "Validates a single cell definition (manifest or fragment).
    Checks :id, :doc, and :schema presence, validates Malli schemas.
-   Expects schemas to be pre-normalized (lite syntax already converted).
    Skips schema validation for :schema :inherit (resolved separately).
-   `context` is a string prefix for error messages (e.g. \"Cell\" or \"Fragment cell\")."
-  [cell-name cell-def context]
-  (when-not (:id cell-def)
-    (throw (ex-info (str context " " cell-name " missing :id") {:cell-name cell-name})))
-  (when-not (and (string? (:doc cell-def)) (seq (:doc cell-def)))
-    (throw (ex-info (str context " " cell-name " missing :doc — provide a non-empty string "
-                         "describing the cell's purpose and semantics")
-                    {:cell-name cell-name})))
-  (when-not (:schema cell-def)
-    (throw (ex-info (str context " " cell-name " missing :schema") {:cell-name cell-name})))
-  (when-not (= :inherit (:schema cell-def))
-    (let [input  (get-in cell-def [:schema :input])
-          output (get-in cell-def [:schema :output])]
-      (when-not input
-        (throw (ex-info (str context " " cell-name " missing :schema :input") {:cell-name cell-name})))
-      (when-not output
-        (throw (ex-info (str context " " cell-name " missing :schema :output") {:cell-name cell-name})))
-      (validate-malli-schema! input (str cell-name " :input"))
-      (validate-output-schema! output (str cell-name " :output")))))
+   `context` is a string prefix for error messages (e.g. \"Cell\" or \"Fragment cell\").
+   opts:
+     :malli/registry — local Malli registry used to resolve named schemas."
+  ([cell-name cell-def context]
+   (validate-cell-def! cell-name cell-def context {}))
+  ([cell-name cell-def context opts]
+   (when-not (:id cell-def)
+     (throw (ex-info (str context " " cell-name " missing :id")
+                     {:cell-name cell-name})))
+   (when-not (and (string? (:doc cell-def)) (seq (:doc cell-def)))
+     (throw (ex-info (str context " " cell-name
+                          " missing :doc — provide a non-empty string "
+                          "describing the cell's purpose and semantics")
+                     {:cell-name cell-name})))
+   (when-not (:schema cell-def)
+     (throw (ex-info (str context " " cell-name " missing :schema")
+                     {:cell-name cell-name})))
+   (when-not (= :inherit (:schema cell-def))
+     (let [input  (get-in cell-def [:schema :input])
+           output (get-in cell-def [:schema :output])]
+       (when-not input
+         (throw (ex-info (str context " " cell-name
+                              " missing :schema :input")
+                         {:cell-name cell-name})))
+       (when-not output
+         (throw (ex-info (str context " " cell-name
+                              " missing :schema :output")
+                         {:cell-name cell-name})))
+       (validate-malli-schema! input (str cell-name " :input") opts)
+       (validate-output-schema! output (str cell-name " :output") opts)))))
 
 ;; ===== Edge target validation =====
 

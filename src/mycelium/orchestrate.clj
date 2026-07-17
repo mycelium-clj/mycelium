@@ -6,24 +6,28 @@
 
 (defn cell-briefs
   "Returns a map of cell-name → brief for every cell in the manifest."
-  [manifest-data]
-  (into {}
-        (map (fn [[cell-name _]]
-               [cell-name (manifest/cell-brief manifest-data cell-name)]))
-        (:cells manifest-data)))
+  ([manifest-data]
+   (cell-briefs manifest-data {}))
+  ([manifest-data opts]
+   (into {}
+         (map (fn [[cell-name _]]
+                [cell-name (manifest/cell-brief manifest-data cell-name opts)]))
+         (:cells manifest-data))))
 
 (defn reassignment-brief
   "Generates a targeted brief that includes failure context.
    `error-context` should be {:error \"...\", :input {...}, :output {...}}"
-  [manifest-data cell-name {:keys [error input output]}]
-  (let [base-brief (manifest/cell-brief manifest-data cell-name)
-        error-section (str "\n\n## Previous Implementation Failed\n\n"
-                          "Error: " error "\n\n"
-                          "Given input: " (pr-str input) "\n\n"
-                          "Your handler returned: " (pr-str output) "\n\n"
-                          "Fix the handler to satisfy the output schema.\n")]
-    (assoc base-brief
-           :prompt (str (:prompt base-brief) error-section))))
+  ([manifest-data cell-name error-context]
+   (reassignment-brief manifest-data cell-name error-context {}))
+  ([manifest-data cell-name {:keys [error input output]} opts]
+   (let [base-brief (manifest/cell-brief manifest-data cell-name opts)
+         error-section (str "\n\n## Previous Implementation Failed\n\n"
+                            "Error: " error "\n\n"
+                            "Given input: " (pr-str input) "\n\n"
+                            "Your handler returned: " (pr-str output) "\n\n"
+                            "Fix the handler to satisfy the output schema.\n")]
+     (assoc base-brief
+            :prompt (str (:prompt base-brief) error-section)))))
 
 (defn region-brief
   "Generates a scoped brief for a named region in a manifest.
@@ -137,21 +141,23 @@
 
 (defn progress
   "Generates a human-readable progress report string."
-  [{:keys [id] :as manifest-data}]
-  (let [status (dev/workflow-status manifest-data)
-        {:keys [total implemented passing failing pending cells]} status]
-    (str "Workflow: " id "\n"
-         "Status: " passing "/" total " cells passing"
+  ([manifest-data]
+   (progress manifest-data {}))
+  ([{:keys [id] :as manifest-data} opts]
+   (let [status (dev/workflow-status manifest-data opts)
+         {:keys [total implemented passing failing pending cells]} status]
+     (str "Workflow: " id "\n"
+          "Status: " passing "/" total " cells passing"
          " | " total " total | " implemented " implemented | " pending " pending\n\n"
-         (str/join "\n"
-                   (map (fn [{:keys [id name status error errors]}]
-                          (let [tag (case status
-                                     :passing "[PASS]"
-                                     :failing "[FAIL]"
-                                     :pending "[    ]")]
-                            (str tag " " name " (" id ")"
-                                 (when (= status :failing)
-                                   (str " — " (or error
-                                                  (some-> errors first :detail :errors str)))))))
-                        cells))
-         "\n")))
+          (str/join "\n"
+                    (map (fn [{:keys [id name status error errors]}]
+                           (let [tag (case status
+                                      :passing "[PASS]"
+                                      :failing "[FAIL]"
+                                      :pending "[    ]")]
+                             (str tag " " name " (" id ")"
+                                  (when (= status :failing)
+                                    (str " — " (or error
+                                                   (some-> errors first :detail :errors str)))))))
+                         cells))
+          "\n"))))
