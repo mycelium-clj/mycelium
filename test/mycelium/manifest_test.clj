@@ -527,3 +527,27 @@
           wf-def   (manifest/manifest->workflow validated)
           result   (myc/run-workflow wf-def {} {:x 21})]
       (is (= "val=42" (:result result))))))
+
+;; ===== Strict :on-error default applies to every arity =====
+
+(deftest validate-manifest-strict-default-test
+  (let [lenient-manifest {:id    :test/no-on-error
+                          :cells {:start {:id     :test/loose
+                                          :doc    "A cell without :on-error"
+                                          :schema {:input  [:map [:x :int]]
+                                                   :output [:map [:y :int]]}}}
+                          :edges {:start :end}}]
+    (testing "One-arity call is strict"
+      (is (thrown-with-msg? Exception #"missing :on-error"
+            (manifest/validate-manifest lenient-manifest))))
+
+    (testing "An opts map without :strict? is also strict, as documented"
+      (is (thrown-with-msg? Exception #"missing :on-error"
+            (manifest/validate-manifest lenient-manifest {})))
+      (is (thrown-with-msg? Exception #"missing :on-error"
+            (manifest/validate-manifest lenient-manifest {:unrelated :option}))))
+
+    (testing "Lenient mode still available with an explicit :strict? false"
+      (is (= :test/no-on-error
+             (:id (manifest/validate-manifest lenient-manifest
+                                              {:strict? false})))))))

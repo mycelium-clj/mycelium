@@ -43,6 +43,14 @@ filters out optional keys when computing a cell's required inputs.
    :output [:map [:done :boolean]]}
   ...)
 ```
+### Fix: `validate-manifest` is strict for every arity
+
+The docstring said `:strict?` (require `:on-error` on every cell) defaults to
+true, but the default only applied to the one-argument call. Passing any opts
+map without `:strict?` silently ran in lenient mode, so
+`(validate-manifest m {})` skipped the `:on-error` check entirely. The default
+now applies whenever `:strict?` is absent. If you were relying on the lenient
+behavior, pass `{:strict? false}` explicitly.
 
 ## 2026-03-07
 

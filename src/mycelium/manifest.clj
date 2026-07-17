@@ -158,7 +158,7 @@
        (doseq [[cell-name cell-def] cells]
          (validate-cell-def! cell-name cell-def))
        ;; Validate :on-error declarations
-       (validate-on-error! cells (:strict? opts))
+       (validate-on-error! cells (:strict? opts true))
        ;; Determine join members — cells consumed by joins don't need edges
        (let [joins-map    (or joins {})
              join-members (set (mapcat :cells (vals joins-map)))
