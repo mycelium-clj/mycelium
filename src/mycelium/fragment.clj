@@ -134,12 +134,27 @@
      :edges      expanded-edges
      :dispatches expanded-dispatches})))
 
+(def ^:dynamic *fragment-dir*
+  "Directory of the manifest being loaded — lets :ref fragment paths resolve
+   file-relative when no classpath resource matches. Bound by
+   mycelium.manifest/load-manifest."
+  nil)
+
 (defn load-fragment
-  "Loads a fragment from a resource path. Returns the parsed EDN."
+  "Loads a fragment from a resource path — classpath first, then relative to
+   the manifest being loaded: its own directory and its parent (the standard
+   resources/ layout keeps manifests in resources/workflows and fragments in
+   resources/fragments)."
   [path]
-  (if-let [resource (io/resource path)]
-    (edn/read-string (slurp resource))
-    (throw (ex-info (str "Fragment resource not found: " path) {:path path}))))
+  (or (when-let [resource (io/resource path)]
+        (edn/read-string (slurp resource)))
+      (when-let [dir *fragment-dir*]
+        (some (fn [base]
+                (let [f (io/file base path)]
+                  (when (.exists f)
+                    (edn/read-string (slurp f)))))
+              [dir (.getParent (io/file dir))]))
+      (throw (ex-info (str "Fragment resource not found: " path) {:path path}))))
 
 (defn- resolve-fragment
   "Resolves fragment data from a mapping. Supports :fragment (inline) or :ref (file path)."

@@ -971,6 +971,25 @@ Group cells into named regions in the manifest for LLM context scoping. `region-
 
 Region cells must exist in `:cells` and no cell may appear in multiple regions. Regions have no runtime effect.
 
+### Agent CLI
+
+Everything above is also reachable from the shell — scoped reads, checked edits, and version-matched skills over manifest files:
+
+```sh
+./bin/myc status resources/workflows/checkout.edn   # per-cell status, exit 3 unless green
+./bin/myc brief resources/workflows/checkout.edn validate
+./bin/myc test resources/workflows/checkout.edn validate --input '{:cart-id 7}' --require app.cells
+./bin/myc refs resources/workflows/checkout.edn validate
+./bin/myc hash resources/workflows/checkout.edn
+./bin/myc patch resources/workflows/checkout.edn --expect-hash <hash> \
+    --op rename-cell --from validate --to validate-inputs   # comments and layout preserved
+./bin/myc skills get agent
+```
+
+Every command takes `--json` for a stable machine-readable envelope.
+
+See [docs/cli.md](docs/cli.md).
+
 ## Architecture
 
 ```

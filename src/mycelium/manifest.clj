@@ -1,6 +1,7 @@
 (ns mycelium.manifest
   "Manifest loading, validation, cell-brief generation, and workflow construction."
   (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.set :as set]
             [clojure.string :as str]
             [malli.generator :as mg]
@@ -195,21 +196,39 @@
 
 ;; ===== Manifest loading =====
 
+(defn manifest-dir
+  "Absolute directory of a manifest file path. Fragment :ref paths resolve
+   relative to it (and to its parent) when no classpath resource matches.
+   Absolute so a bare filename still yields a directory."
+  [path]
+  (.getParent (.getAbsoluteFile (io/file path))))
+
+(defn expand-manifest
+  "Expands :fragments and validates a manifest already read from `path`.
+   `path` is only used to resolve fragment :ref paths relative to the
+   manifest's directory. This is everything load-manifest does after reading
+   the file, exposed so callers holding the raw EDN (e.g. the CLI's patch
+   command) can validate without re-reading.
+   opts as for load-manifest."
+  ([manifest path]
+   (expand-manifest manifest path {:strict? true}))
+  ([manifest path opts]
+   (binding [fragment/*fragment-dir* (manifest-dir path)]
+     (validate-manifest (if (:fragments manifest)
+                          (expand-fragments manifest opts)
+                          manifest)
+                        opts))))
+
 (defn load-manifest
   "Loads and validates a manifest from an EDN file path.
    If the manifest contains :fragments, expands them before validation.
    opts:
-     :strict? — require :on-error on every cell.
-     :malli/registry — local Malli registry used to validate schemas."
+      :strict? — require :on-error on every cell.
+      :malli/registry — local Malli registry used to validate schemas."
   ([path]
    (load-manifest path {:strict? true}))
   ([path opts]
-   (let [content  (slurp path)
-         manifest (edn/read-string content)
-         expanded (if (:fragments manifest)
-                    (expand-fragments manifest opts)
-                    manifest)]
-     (validate-manifest expanded opts))))
+   (expand-manifest (edn/read-string (slurp path)) path opts)))
 
 ;; ===== Cell brief generation =====
 
