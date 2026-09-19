@@ -983,6 +983,11 @@ Everything above is also reachable from the shell — scoped reads, checked edit
 ./bin/myc hash resources/workflows/checkout.edn
 ./bin/myc patch resources/workflows/checkout.edn --expect-hash <hash> \
     --op rename-cell --from validate --to validate-inputs   # comments and layout preserved
+./bin/myc patch resources/workflows/checkout.edn \
+    --op add-cell --name audit --id app/audit --doc "Record the order" \
+    --op set-edge --from audit --to end \
+    --op set-edge --from charge --label ok --to audit        # one validated write
+./bin/myc run resources/workflows/checkout.edn --input '{:cart-id 7}' --require app.cells
 ./bin/myc skills get agent
 ```
 

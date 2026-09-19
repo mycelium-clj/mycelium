@@ -14,3 +14,13 @@
    :handler (fn [_ _] {:y "not an int"})
    :schema  {:input  [:map [:x :int]]
              :output [:map [:y :int]]}})
+
+(defmethod cell/cell-spec :fixture/uses-db [_]
+  {:id       :fixture/uses-db
+   :handler  (fn [{:keys [db]} _] {:rows (count db)})
+   :schema   {:input [:map] :output [:map [:rows :int]]}
+   :requires [:db]})
+
+(def resources
+  "Resolved by `myc run --resources mycelium.cli-fixture-cells/resources`."
+  {:db [1 2 3]})

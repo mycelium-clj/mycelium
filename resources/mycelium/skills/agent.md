@@ -28,8 +28,13 @@ every cell reads as `pending` because no handler is registered.
 
 For structural edits: `myc refs <manifest> <cell>` shows every site a change
 touches, `myc hash` then `myc patch --expect-hash <h> --op ...` applies it
-checked. A successful patch is already validated and written — do not run
-`myc validate` just to confirm.
+checked. Batch related ops in one patch (add a cell and wire it); validation
+runs once for the batch. A successful patch is already validated and
+written — do not run `myc validate` or `myc diff` just to confirm.
+
+End to end: `myc run <manifest> --input '{...}'` prints the path taken and
+the result; `--stubs` runs unregistered cells as identity to check routing
+before handlers exist.
 
 ## Rules {#rules}
 
@@ -61,12 +66,17 @@ myc brief <path> <cell>          one cell's implementation brief
 myc briefs <path>                all briefs
 myc region <path> <name>         subgraph cluster brief
 myc refs <path> <cell>           every reference site for a cell
+myc diff <a> <b>                 semantic diff of two manifests (exit 1 if different)
+myc run <path> --input <edn> [--resources <ns/var>] [--stubs]
+                                 run the workflow: trace, result, data (exit 3 on error)
 myc plan <path>                  build order (cells are independent by default)
 myc paths <path>                 every start-to-terminal path
 myc schema <path>                data keys available at each cell
 myc dot <path>                   DOT rendering
-myc patch <path> --op rename-cell --from <old> --to <new> [--expect-hash <h>] [--dry-run]
-                                 checked edit, keeps comments/layout; `--op help` lists ops
+myc patch <path> --op <name> [--<arg> <v> ...] [--expect-hash <h>] [--dry-run]
+                                 checked edit, keeps comments/layout; `--op help` lists ops:
+                                 rename-cell add-cell remove-cell set-edge delete-edge
+                                 set-cell-field set-dispatches
 myc skills [get <topic> [--section <id>]]
                                  this documentation, one topic or section
 ```

@@ -4,7 +4,7 @@
                                     :git/sha "fc4b684a380700a693ee9502674e354835864960"}
          metosin/malli       {:mvn/version "0.17.0"}
          org.clojure/data.json {:mvn/version "2.5.1"}
-         borkdude/rewrite-edn  {:mvn/version "0.5.9"}
+         rewrite-clj/rewrite-clj {:mvn/version "1.2.57"}
          io.github.resilience4j/resilience4j-all {:mvn/version "2.3.0"}}
   :aliases
   {:dev  {:extra-paths ["dev" "test" "examples"]

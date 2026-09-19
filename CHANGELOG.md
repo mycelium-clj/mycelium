@@ -18,15 +18,27 @@ the manifest is the program database, the CLI is the agent's door into it.
 - `myc refs <path> <cell>` — every reference site for a cell (edges both
   directions, dispatches, joins, regions, constraints, timeouts, resilience,
   error-groups, on-error, pipeline, fragment aliases and exits).
-- `myc patch --op rename-cell --from <old> --to <new>` — checked structural
-  edit on the manifest *as written*: `:fragments`, `:pipeline` and
-  `:schema :inherit` are kept, every reference is rewritten (including
-  fragment `:as`/`:exits`), and the result is validated before writing.
-  The write preserves comments and layout — only changed entries are
-  reprinted — and is atomic. Renaming a cell that lives inside a fragment is
-  refused with a pointer to the fragment file. `--expect-hash` guards
-  against stale edits (hash from `myc hash`, over the file's own content);
-  `--dry-run` validates without writing; `myc patch --op help` lists ops.
+- `myc patch --op <name> ...` — checked structural edits on the manifest
+  *as written*: `:fragments`, `:pipeline` and `:schema :inherit` are kept,
+  and the result is validated before writing. Ops: `rename-cell` (rewrites
+  every reference, including fragment `:as`/`:exits`), `add-cell`
+  (`--after` splices into an unconditional edge or `:pipeline`),
+  `remove-cell` (`--rewire` retargets incoming references, else it refuses
+  and lists them), `set-edge`, `delete-edge`, `set-cell-field` (`--expect`
+  guards the current value), `set-dispatches`. Repeated `--op` batches with
+  one validation, so a cell can be added and wired in the same patch. The
+  write preserves comments and layout — only changed entries are reprinted,
+  added entries follow the map's indentation — and is atomic. Ops that
+  touch a cell living inside a fragment are refused with a pointer to the
+  fragment file. `--expect-hash` guards against stale edits (hash from
+  `myc hash`, over the file's own content); `--dry-run` validates without
+  writing; `myc patch --op help` lists ops.
+- `myc diff <a> <b>` — semantic diff of two manifests (cells per field,
+  edges, dispatches, other sections); exit 1 when they differ.
+- `myc run <path> --input <edn> [--resources <ns/var>] [--stubs]` — run the
+  workflow and print the trace, outcome and data; schema failures and
+  handler exceptions are reported with cell and key-diff (exit 3). Refuses
+  unregistered cells unless `--stubs` runs them as identity.
 - `--json` on every command: `{"ok": bool, "exit": n, ...}` with the
   command's structured fields, or `"error"` + `"data"` on failure.
 - `myc skills` lists bundled, version-matched agent docs
@@ -40,7 +52,7 @@ the manifest is the program database, the CLI is the agent's door into it.
   classpath — `myc validate examples/.../user-onboarding.edn` works outside
   an app classpath. New `manifest/expand-manifest` exposes the
   expand-and-validate step for callers holding raw EDN.
-- New deps: `borkdude/rewrite-edn` (format-preserving patch writes),
+- New deps: `rewrite-clj/rewrite-clj` (format-preserving patch writes),
   `org.clojure/data.json`.
 - Docs: see `docs/cli.md`.
 

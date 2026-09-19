@@ -208,3 +208,68 @@
                          (update :dispatches (fn [ds] (-> ds (dissoc :process) (assoc :transform (:process ds))))))
                      [:edges :start :success] :transform)
            (edn/read-string (slurp path))))))
+
+;; ===== new ops through the CLI =====
+
+(deftest patch-add-cell-and-wire-in-one-batch-test
+  (let [path (write-manifest! manifest)
+        {:keys [exit message]} (cli/run ["patch" path
+                                         "--op" "add-cell" "--name" "audit" "--id" "t/audit" "--doc" "Audit log"
+                                         "--input" "[:map [:z :int]]" "--requires" "[:db]"
+                                         "--op" "set-edge" "--from" "audit" "--to" "end"
+                                         "--op" "set-edge" "--from" "process" "--label" "done" "--to" ":audit"])
+        after (edn/read-string (slurp path))]
+    (is (zero? exit) message)
+    (is (= {:id :t/audit :doc "Audit log" :schema {:input [:map [:z :int]] :output [:map]}
+            :on-error nil :requires [:db]}
+           (get-in after [:cells :audit])))
+    (is (= :end (get-in after [:edges :audit])))
+    (is (= {:done :audit} (get-in after [:edges :process])))
+    (is (zero? (:exit (cli/run ["validate" path]))))))
+
+(deftest patch-missing-required-op-arg-is-usage-error-test
+  (let [path (write-manifest! manifest)
+        {:keys [exit message]} (cli/run ["patch" path "--op" "add-cell" "--name" "audit"])]
+    (is (= 64 exit))
+    (is (str/includes? message "--id"))))
+
+(deftest patch-remove-cell-with-rewire-test
+  ;; replace the error cell: add the new one, retarget everything, drop the old
+  (let [path (write-manifest! manifest)
+        {:keys [exit message]} (cli/run ["patch" path
+                                         "--op" "add-cell" "--name" "fail" "--id" "t/fail" "--doc" "Failure page" "--edges" ":end"
+                                         "--op" "remove-cell" "--name" "err" "--rewire" "fail"])
+        after (edn/read-string (slurp path))]
+    (is (zero? exit) message)
+    (is (not (contains? (:cells after) :err)))
+    (is (= :fail (get-in after [:cells :start :on-error])))
+    (is (= {:success :process :failure :fail} (get-in after [:edges :start])))
+    (is (zero? (:exit (cli/run ["validate" path]))))))
+
+(deftest patch-set-cell-field-coerces-by-field-test
+  (let [path (write-manifest! manifest)
+        {:keys [exit message]} (cli/run ["patch" path
+                                         "--op" "set-cell-field" "--name" "process" "--field" "doc"
+                                         "--value" "Transform the thing" "--expect" "process"
+                                         "--op" "set-cell-field" "--name" "process" "--field" "on-error" "--value" "nil"
+                                         "--op" "set-cell-field" "--name" "process" "--field" "requires" "--value" "[:db :cache]"])
+        after (edn/read-string (slurp path))]
+    (is (zero? exit) message)
+    (is (= "Transform the thing" (get-in after [:cells :process :doc])))
+    (is (nil? (get-in after [:cells :process :on-error])))
+    (is (= [:db :cache] (get-in after [:cells :process :requires])))))
+
+(deftest patch-set-cell-field-expect-mismatch-exits-1-test
+  (let [path (write-manifest! manifest)
+        before (slurp path)
+        {:keys [exit message]} (cli/run ["patch" path "--op" "set-cell-field" "--name" "process"
+                                         "--field" "doc" "--value" "x" "--expect" "nope"])]
+    (is (= 1 exit))
+    (is (str/includes? message "expected"))
+    (is (= before (slurp path)))))
+
+(deftest patch-op-help-lists-all-ops-test
+  (let [{:keys [message]} (cli/run ["patch" "--op" "help"])]
+    (doseq [op ["rename-cell" "add-cell" "remove-cell" "set-edge" "delete-edge" "set-cell-field" "set-dispatches"]]
+      (is (str/includes? message op) op))
+    (is (str/includes? message "[--after"))))
