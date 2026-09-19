@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# myc — mycelium agent CLI. Runs from the repo checkout; as a library
+# dependency, invoke via clojure -M -m mycelium.cli instead.
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$DIR"
+exec clojure -M:cli "$@"

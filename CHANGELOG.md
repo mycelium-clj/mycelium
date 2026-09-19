@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Feature: agent CLI (`myc`)
+
+Scoped reads, checked edits, and version-matched skills over EDN manifests —
+the manifest is the program database, the CLI is the agent's door into it.
+
+- `myc validate/hash/status/brief/briefs/region/plan/paths/schema/dot` —
+  query commands over a manifest file; `status` exits 3 unless all cells
+  pass; `--json` on status; `--require <ns>` loads handler namespaces.
+- `myc patch --op rename-cell --from <old> --to <new>` — checked structural
+  edit that rewrites every reference (edges, dispatches, joins, regions,
+  constraints, timeouts, error-groups, on-error, pipeline) and re-validates
+  before writing; rejected edits leave the file untouched.
+  `--expect-hash` guards against stale edits (hash from `myc hash`);
+  `--dry-run` validates without writing.
+- `myc skills get <topic> [--section <id>]` — bundled, version-matched agent
+  docs (agent/manifest/cells/testing/patterns) served from the library's
+  resources, so they can't drift from the installed version.
+- `bin/myc` launcher + `:cli` alias.
+- `load-manifest` now resolves fragment `:ref` paths relative to the manifest
+  file (its directory and the directory's parent) in addition to the
+  classpath — `myc validate examples/.../user-onboarding.edn` works outside
+  an app classpath.
+- Docs: see `docs/cli.md`.
+
 ### Breaking: per-transition output schemas require explicit `[:per-transition ...]` wrapper
 
 Cells whose downstream edge selection depends on the cell's output

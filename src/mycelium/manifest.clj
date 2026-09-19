@@ -1,6 +1,7 @@
 (ns mycelium.manifest
   "Manifest loading, validation, cell-brief generation, and workflow construction."
   (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.set :as set]
             [clojure.string :as str]
             [malli.generator :as mg]
@@ -199,17 +200,18 @@
   "Loads and validates a manifest from an EDN file path.
    If the manifest contains :fragments, expands them before validation.
    opts:
-     :strict? — require :on-error on every cell.
-     :malli/registry — local Malli registry used to validate schemas."
+      :strict? — require :on-error on every cell.
+      :malli/registry — local Malli registry used to validate schemas."
   ([path]
    (load-manifest path {:strict? true}))
   ([path opts]
-   (let [content  (slurp path)
-         manifest (edn/read-string content)
-         expanded (if (:fragments manifest)
-                    (expand-fragments manifest opts)
-                    manifest)]
-     (validate-manifest expanded opts))))
+   (binding [fragment/*fragment-dir* (.getParent (io/file path))]
+     (let [content  (slurp path)
+           manifest (edn/read-string content)
+           expanded (if (:fragments manifest)
+                      (expand-fragments manifest opts)
+                      manifest)]
+       (validate-manifest expanded opts)))))
 
 ;; ===== Cell brief generation =====
 
