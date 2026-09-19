@@ -11,6 +11,7 @@
             [clojure.string :as str]
             [clojure.walk :as walk]
             [mycelium.cell :as cell]
+            [mycelium.core :as core]
             [mycelium.dev :as dev]
             [mycelium.manifest :as manifest]
             [mycelium.orchestrate :as orch]
@@ -107,6 +108,9 @@ Commands:
   paths <path>                 enumerate all start-to-terminal paths
   schema <path>                accumulated data keys at each cell
   dot <path>                   DOT graph for visualization
+  diff <path-a> <path-b>       semantic diff of two manifests; exit 1 when they differ
+  run <path> --input <edn> [--resources <ns/var>] [--stubs]
+                               run the workflow, print trace + result; exit 3 on error
   patch <path> --op <name> [--<arg> <value> ...] [--expect-hash <h>] [--dry-run]
                                checked edit; `myc patch --op help` lists ops
   skills [get <topic> [--section <id>]]
@@ -115,14 +119,23 @@ Commands:
 Flags:
   --json                       machine-readable output: {\"ok\": bool, \"exit\": n, ...}
   --require <ns>               load a namespace (may repeat) before querying, so
-                               registered cell handlers are visible to status/test/schema")
+                               registered cell handlers are visible to status/test/run/schema")
 
 ;; ===== argv parsing =====
 
 (def ^:private valued-flags
   "Flags that consume the next token. Anything else starting with -- is a
    boolean flag, except inside an --op group where --key value pairs are op args."
-  #{"--require" "--section" "--expect-hash" "--input"})
+  #{"--require" "--section" "--expect-hash" "--input" "--resources"})
+
+(def ^:private boolean-flags
+  #{"--json" "--dry-run" "--lenient" "--stubs"})
+
+(def ^:private op-group-terminators
+  "Flags that end an --op group even though they look like `--key value`.
+   Everything else after `--op NAME` belongs to the op (so an op may take
+   --input, which is also a top-level flag for other commands)."
+  #{"--op" "--require" "--expect-hash"})
 
 (defn- parse-argv
   "Splits argv into {:pos [...] :flags #{...} :vals {flag [v ...]} :ops [...]}.
@@ -140,10 +153,9 @@ Flags:
                 [op-args remaining]
                 (loop [xs (rest more) op {:op op-name}]
                   (let [[k v] xs]
-                    (if (and k (str/starts-with? k "--") (not= "--op" k)
-                             (not (valued-flags k)) (not= "--json" k)
-                             (not= "--dry-run" k) (not= "--lenient" k))
-                      (do (when (or (nil? v) (str/starts-with? v "--"))
+                    (if (and k (str/starts-with? k "--")
+                             (not (op-group-terminators k)) (not (boolean-flags k)))
+                      (do (when (nil? v)
                             (throw (ex-info (str k " requires a value") {:exit 64})))
                           (recur (drop 2 xs) (assoc op (keyword (subs k 2)) v)))
                       [op xs])))]
@@ -161,13 +173,7 @@ Flags:
           :else
           (recur more (update acc :pos conj a)))))))
 
-(defn- ->cell-kw
-  "Cell name from a CLI token: `start`, `:start`, `auth/validate` all work."
-  [s]
-  (cond
-    (keyword? s) s
-    (nil? s)     nil
-    :else        (keyword (if (str/starts-with? s ":") (subs s 1) s))))
+(def ^:private ->cell-kw patch/cell-kw)
 
 ;; ===== JSON =====
 
@@ -293,28 +299,67 @@ Flags:
   (str "Patch ops (myc patch <path> --op <name> [--<arg> <value> ...]):\n"
        (str/join "\n"
                  (for [[op-name {:keys [doc args]}] (sort (patch/ops))]
-                   (str "  " op-name "\n    " doc "\n"
+                   (str "  " op-name " "
+                        (str/join " " (for [arg args]
+                                        (if (:required? arg)
+                                          (str "--" (name (:name arg)) " <v>")
+                                          (str "[--" (name (:name arg)) " <v>]"))))
+                        "\n    " doc "\n"
                         (str/join "\n" (for [arg args]
-                                         (format "    --%-10s %s" (name (:name arg)) (:doc arg)))))))))
+                                         (format "    --%-11s %s" (name (:name arg)) (:doc arg)))))))))
+
+(defn- format-diff
+  [{:keys [same? id cells edges dispatches sections]} a b path-a path-b]
+  (if same?
+    (str "no differences: " path-a " " path-b)
+    (let [section (fn [title {:keys [added removed changed]} fmt-added fmt-removed fmt-changed]
+                    (when (or (seq added) (seq removed) (seq changed))
+                      (str title ":\n"
+                           (str/join "\n" (concat (map #(str "  + " (fmt-added %)) added)
+                                                   (map #(str "  - " (fmt-removed %)) removed)
+                                                   (mapcat fmt-changed changed)))
+                           "\n")))]
+      (str (when id (str "id: " (pr-str (first id)) " → " (pr-str (second id)) "\n"))
+           (section "cells" cells
+                    (fn [k] (str k " (" (pr-str (get-in b [:cells k :id])) ")"))
+                    (fn [k] (str k " (" (pr-str (get-in a [:cells k :id])) ")"))
+                    (fn [[k fields]] (map (fn [[f [o n]]] (str "  ~ " k " " f " " (pr-str o) " → " (pr-str n))) fields)))
+           (section "edges" edges
+                    (fn [k] (str k " → " (pr-str (get-in b [:edges k]))))
+                    (fn [k] (str k " → " (pr-str (get-in a [:edges k]))))
+                    (fn [[k [o n]]] [(str "  ~ " k " " (pr-str o) " → " (pr-str n))]))
+           (section "dispatches" dispatches
+                    pr-str pr-str
+                    (fn [[k _]] [(str "  ~ " k)]))
+           (when (seq sections)
+             (str "other:\n"
+                  (str/join "\n" (map (fn [[k [o n]]] (str "  ~ " k " " (pr-str o) " → " (pr-str n))) sections))
+                  "\n"))))))
+
+(defn- format-trace-step
+  [{:keys [cell cell-id transition]} next-cell]
+  (str "  " cell " (" cell-id ") "
+       (if transition (str "--" (name transition) "-> ") "--> ")
+       next-cell))
+
+(defn- format-run
+  [{:keys [status trace data error halted-at]}]
+  (str "Trace:\n"
+       (str/join "\n" (map-indexed (fn [i step]
+                                      (format-trace-step step (or (:cell (get trace (inc i)))
+                                                                  (case status
+                                                                    :ok     :end
+                                                                    :error  :error
+                                                                    :halted :halt))))
+                                    trace))
+       "\nResult: " (name status)
+       (when halted-at (str " at " halted-at))
+       (when error (str "\n" (subs (str (:error-type error)) 1) ": " (:message error)
+                        (when-let [kd (:key-diff error)] (str "\n  key-diff: " (pr-str kd)))
+                        (when-let [fk (:failed-keys error)] (str "\n  failed-keys: " (pr-str fk)))))
+       "\nData: " (pr-str data)))
 
 ;; ===== commands =====
-
-(defn- coerce-op
-  "Turns a parsed `--op NAME --k v` group into the map patch/apply-op expects,
-   using the op registry's arg types. Unknown ops pass through so patch
-   reports them."
-  [{:keys [op] :as group}]
-  (if-let [spec (get (patch/ops) op)]
-    (reduce (fn [m {arg-name :name type :type}]
-              (let [v (get group arg-name)]
-                (when (nil? v)
-                  (throw (ex-info (str "--op " op " requires --" (name arg-name)
-                                       " (" (str/join ", " (map #(str "--" (name (:name %))) (:args spec))) ")")
-                                  {:exit 64})))
-                (assoc m arg-name (case type :cell (->cell-kw v) v))))
-            {:op op}
-            (:args spec))
-    group))
 
 (defn- write-atomically!
   "Writes text to path via a sibling temp file + atomic move."
@@ -346,7 +391,7 @@ Flags:
     :else
     (let [dry-run?    (contains? flags "--dry-run")
           expect-hash (first (get vals "--expect-hash"))
-          ops         (mapv coerce-op ops)
+          ops         (mapv patch/coerce-op ops)
           raw         (read-raw path)
           text        (slurp path)
           result      (try
@@ -473,9 +518,58 @@ Flags:
                    {:exit 0 :message d :data {:dot d}})
       (throw (ex-info (str "Unknown command: " cmd "\n\n" usage) {:exit 64})))))
 
-(def ^:private raw-commands
-  "Commands that read the file without validating it."
-  #{"hash"})
+(defn- resolve-resources
+  "`--resources ns/var`: the var's value, or its return value when it is a fn."
+  [spec]
+  (when spec
+    (let [sym (symbol spec)]
+      (when-not (namespace sym)
+        (throw (ex-info (str "--resources expects ns/var, got " spec) {:exit 64})))
+      (let [v (try (requiring-resolve sym)
+                   (catch Exception e
+                     (throw (ex-info (str "Could not resolve --resources " spec ": " (ex-message e)) {:exit 1}))))
+            _ (when-not v (throw (ex-info (str "Could not resolve --resources " spec) {:exit 1})))
+            val @v]
+        (if (fn? val) (val) val)))))
+
+(defn- run-workflow-cmd
+  [m {:keys [flags vals]}]
+  (let [input-s (first (get vals "--input"))]
+    (when-not input-s
+      (throw (ex-info "Usage: myc run <path> --input <edn> [--resources <ns/var>] [--require <ns>] [--stubs]" {:exit 64})))
+    (let [input      (edn/read-string input-s)
+          missing    (->> (:cells m)
+                          (remove (fn [[_ def]] (cell/get-cell (:id def))))
+                          (map (fn [[k def]] (str k " (" (:id def) ")"))))
+          _          (when (and (seq missing) (not (contains? flags "--stubs")))
+                       (throw (ex-info (str "Cells with no registered handler: " (str/join ", " missing)
+                                            " — --require their namespaces, or pass --stubs to run them as identity")
+                                       {:exit 1 :missing missing})))
+          resources  (or (resolve-resources (first (get vals "--resources"))) {})
+          ;; the default error handler throws; return the data instead so the
+          ;; trace and error keys can be reported. Handler exceptions arrive as
+          ;; :error on the fsm state, schema failures as keys already in :data.
+          on-error   (fn [_ {:keys [data error last-state-id]}]
+                       (if error
+                         (let [inner (ex-data error)
+                               cause (or (:error inner) error)]
+                           (assoc (or data (:data inner) {})
+                                  :mycelium/error {:cell    (or (:current-state-id inner) last-state-id)
+                                                   :message (ex-message cause)}))
+                         data))
+          result     (core/run-workflow (manifest/manifest->workflow m) resources input {:on-error on-error})
+          error      (core/workflow-error result)
+          halted-at  (get-in result [:mycelium/halt :cell])
+          status     (cond error :error, (:mycelium/halt result) :halted, :else :ok)
+          trace      (mapv #(dissoc % :data) (:mycelium/trace result))
+          data       (dissoc result :mycelium/trace :mycelium/halt :mycelium/resume)
+          summary    {:status status :trace trace :data data :error error :halted-at halted-at
+                      :stubbed (when (contains? flags "--stubs") missing)}]
+      {:exit (if error 3 0)
+       :data summary
+       :message (str (when (seq (:stubbed summary))
+                       (str "Stubbed (identity) cells: " (str/join ", " missing) "\n"))
+                     (format-run summary))})))
 
 (defn- dispatch
   [cmd {:keys [pos flags vals] :as parsed}]
@@ -487,16 +581,25 @@ Flags:
                            (run-patch path parsed))
       (nil? path)      (throw (ex-info (str "Usage: myc " cmd " <manifest-path> [...]\n\n" usage)
                                        {:exit 64}))
-      (raw-commands cmd)
+      (= cmd "hash")
       (let [h (patch/manifest-hash (read-raw path))]
         {:exit 0 :message h :data {:hash h}})
+
+      (= cmd "diff")
+      (let [path-b (second pos)]
+        (when-not path-b
+          (throw (ex-info "Usage: myc diff <path-a> <path-b>" {:exit 64})))
+        (let [a (read-raw path) b (read-raw path-b)
+              d (patch/diff-manifests a b)]
+          {:exit (if (:same? d) 0 1) :data d :message (format-diff d a b path path-b)}))
 
       :else
       (do (requires->load! (get vals "--require"))
           (let [strict? (and (= cmd "validate") (not (contains? flags "--lenient")))
                 m       (read-manifest path {:strict? strict?})]
-            (if (= cmd "test")
-              (run-test m path parsed)
+            (case cmd
+              "test" (run-test m path parsed)
+              "run"  (run-workflow-cmd m parsed)
               (run-query cmd m path parsed)))))))
 
 (defn run

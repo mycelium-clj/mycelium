@@ -305,3 +305,90 @@
   (let [{:keys [exit message]} (cli/run ["refs" @valid-path "nope"])]
     (is (= 1 exit))
     (is (str/includes? message "not found"))))
+
+;; ===== dispatch: diff =====
+
+(deftest diff-command-reports-changes-and-exit-code-test
+  (let [b    (-> test-manifest
+                 (assoc-in [:cells :process :doc] "Changed")
+                 (assoc-in [:cells :audit] {:id :test/audit :doc "audit" :schema {:input [:map] :output [:map]} :on-error nil})
+                 (assoc-in [:edges :audit] :end)
+                 (assoc-in [:edges :process :done] :audit))
+        {:keys [exit message]} (cli/run ["diff" @valid-path (write-manifest! b)])]
+    (is (= 1 exit))
+    (is (str/includes? message "+ :audit (:test/audit)"))
+    (is (str/includes? message "~ :process :doc"))
+    (is (str/includes? message "~ :process {:done :end} → {:done :audit}"))
+    (is (str/includes? message "+ :audit → :end")))
+  (let [{:keys [exit message]} (cli/run ["diff" @valid-path @valid-path])]
+    (is (zero? exit))
+    (is (str/includes? message "no differences"))))
+
+(deftest diff-command-json-test
+  (let [b (assoc-in test-manifest [:cells :process :doc] "Changed")
+        out (json/read-str (:message (cli/run ["diff" @valid-path (write-manifest! b) "--json"])))]
+    (is (= false (get out "same?")))
+    (is (= ["Process data" "Changed"] (get-in out ["cells" "changed" "process" "doc"])))))
+
+(deftest diff-command-usage-test
+  (is (= 64 (:exit (cli/run ["diff" @valid-path])))))
+
+;; ===== dispatch: run =====
+
+(deftest run-command-executes-workflow-and-prints-trace-test
+  (load-fixture-cells!)
+  (let [m {:id :test/run
+           :cells {:start {:id :fixture/double :doc "double" :schema {:input [:map [:x :int]] :output [:map [:y :int]]} :on-error nil}
+                   :again {:id :fixture/double :doc "double" :schema {:input [:map [:x :int]] :output [:map [:y :int]]} :on-error nil}}
+           :edges {:start {:big :end :small :again} :again :end}
+           :dispatches {:start '[[:big (fn [d] (> (:y d) 10))] [:small (fn [d] (<= (:y d) 10))]]}}
+        path (write-manifest! m)
+        {:keys [exit message]} (cli/run ["run" path "--input" "{:x 2}" "--require" "mycelium.cli-fixture-cells"])]
+    (is (zero? exit) message)
+    (is (str/includes? message "Result: ok"))
+    (is (str/includes? message ":start (:fixture/double) --small-> :again"))
+    (is (str/includes? message ":again (:fixture/double) --> :end"))
+    (is (str/includes? message ":y 4"))))
+
+(deftest run-command-reports-errors-exit-3-test
+  (load-fixture-cells!)
+  (let [m {:id :test/run-err
+           :cells {:start {:id :fixture/broken :doc "broken" :schema {:input [:map [:x :int]] :output [:map [:y :int]]} :on-error nil}}
+           :edges {:start :end}}
+        path (write-manifest! m)
+        {:keys [exit message]} (cli/run ["run" path "--input" "{:x 2}" "--require" "mycelium.cli-fixture-cells"])]
+    (is (= 3 exit))
+    (is (str/includes? message "Result: error"))
+    (is (str/includes? message "schema/output"))))
+
+(deftest run-command-refuses-unregistered-cells-unless-stubs-test
+  (let [path (write-manifest! test-manifest)
+        refused (cli/run ["run" path "--input" "{:x 1}"])
+        stubbed (cli/run ["run" path "--input" "{:x 1}" "--stubs"])]
+    (is (= 1 (:exit refused)))
+    (is (str/includes? (:message refused) "no registered handler"))
+    (is (str/includes? (:message refused) "--stubs"))
+    ;; identity stubs: :y never set, so :failure route is taken to :error
+    (is (str/includes? (:message stubbed) "--failure-> :error"))))
+
+(deftest run-command-resources-var-test
+  (load-fixture-cells!)
+  (let [m {:id :test/run-res
+           :cells {:start {:id :fixture/uses-db :doc "db" :schema {:input [:map] :output [:map [:rows :int]]} :requires [:db] :on-error nil}}
+           :edges {:start :end}}
+        path (write-manifest! m)
+        {:keys [exit message]} (cli/run ["run" path "--input" "{}" "--require" "mycelium.cli-fixture-cells"
+                                         "--resources" "mycelium.cli-fixture-cells/resources"])]
+    (is (zero? exit) message)
+    (is (str/includes? message ":rows 3"))))
+
+(deftest run-command-json-test
+  (load-fixture-cells!)
+  (let [m {:id :test/run-json
+           :cells {:start {:id :fixture/double :doc "double" :schema {:input [:map [:x :int]] :output [:map [:y :int]]} :on-error nil}}
+           :edges {:start :end}}
+        path (write-manifest! m)
+        out  (json/read-str (:message (cli/run ["run" path "--input" "{:x 5}" "--json" "--require" "mycelium.cli-fixture-cells"])))]
+    (is (= "ok" (get out "status")))
+    (is (= 10 (get-in out ["data" "y"])))
+    (is (= "start" (get-in out ["trace" 0 "cell"])))))
