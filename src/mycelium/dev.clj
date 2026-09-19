@@ -167,8 +167,9 @@
     (.append sb "}\n")
     (str sb)))
 
-(defn- generate-test-input
-  "Generates test input data from a cell's input schema using Malli generators."
+(defn generate-test-input
+  "Generates test input data from a cell's input schema using Malli generators.
+   Public so the CLI can run one cell with the same input `workflow-status` uses."
   [cell opts]
   (try
     (mg/generate (schema/compile-schema

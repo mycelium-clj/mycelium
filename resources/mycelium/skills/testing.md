@@ -1,3 +1,7 @@
+---
+name: testing
+description: Isolated cell tests, trace-based workflow tests, schema iteration, CLI gate.
+---
 # Testing
 
 Mycelium's claim is that schema contracts catch integration bugs early.
@@ -50,7 +54,13 @@ Then lock down: run with `:validate :strict` (default). During development
 `:validate :warn` collects all violations without halting; `:validate :off`
 skips checks entirely.
 
-## CLI Status As A Gate {#cli-gate}
+## CLI: One Cell, Then The Gate {#cli-gate}
+
+`myc test <manifest> <cell> [--input '{...}']` is `dev/test-cell` from the
+shell: schema validation on both sides, the manifest's dispatch predicates
+evaluated so the matched label is reported, errors tagged by phase
+(`input`/`output`/`dispatch`). Without `--input` it uses a generated input
+from the schema. Exit 3 on failure; `--json` for the full result map.
 
 `myc status <manifest>` re-runs every cell with generated inputs and exits 3
 unless all pass. It is the cheap pre-PR check; the kaocha suite remains the

@@ -1,3 +1,7 @@
+---
+name: manifest
+description: EDN manifest syntax: cells, edges, dispatches, joins, fragments, regions.
+---
 # Manifest Syntax
 
 A manifest is an EDN map describing a workflow as pure data: cells, edges,

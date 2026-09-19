@@ -1,5 +1,7 @@
 (ns mycelium.patch-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.edn]
+            [clojure.string :as str]
+            [clojure.test :refer [deftest is]]
             [mycelium.patch :as patch]))
 
 (def manifest
@@ -127,3 +129,154 @@
   (is (thrown? Exception
         (patch/apply-op (assoc-in manifest [:cells :process :schema :input] [:not-a-type])
                         {:op "rename-cell" :from :process :to :transform}))))
+
+;; ===== rename does not touch what it doesn't need to =====
+
+(deftest rename-does-not-add-on-error-to-cells-lacking-it-test
+  (let [m (update-in manifest [:cells :err] dissoc :on-error)
+        result (patch/apply-op m {:op "rename-cell" :from :process :to :transform})]
+    (is (not (contains? (get-in result [:cells :err]) :on-error)))
+    (is (= :err (get-in result [:cells :start :on-error])))))
+
+;; ===== raw manifests with :fragments =====
+
+(def fragment
+  {:id :frag/tail
+   :doc "tail"
+   :entry :fetch
+   :exits [:done]
+   :cells {:fetch  {:id :f/fetch :doc "fetch" :schema {:input [:map] :output [:map [:items :any]]} :on-error nil}
+           :render {:id :f/render :doc "render" :schema {:input [:map [:items :any]] :output [:map [:html :string]]} :on-error nil}}
+   :edges {:fetch :render, :render :_exit/done}})
+
+(def frag-manifest
+  {:id :test/frag
+   :fragments {:tail {:fragment fragment :as :fetch-list :exits {:done :finish}}}
+   :cells {:start  {:id :t/parse :doc "parse" :schema {:input [:map] :output [:map]} :on-error nil}
+           :finish {:id :t/finish :doc "finish" :schema {:input [:map] :output [:map]} :on-error nil}}
+   :edges {:start :fetch-list, :finish :end}})
+
+(deftest rename-fragment-entry-alias-rewrites-as-and-host-edges-test
+  (let [result (patch/apply-op frag-manifest {:op "rename-cell" :from :fetch-list :to :list})]
+    (is (= :list (get-in result [:fragments :tail :as])))
+    (is (= :list (get-in result [:edges :start])))
+    ;; still a raw manifest: fragments not inlined
+    (is (contains? result :fragments))
+    (is (= #{:start :finish} (set (keys (:cells result)))))))
+
+(deftest rename-host-cell-rewrites-fragment-exits-test
+  (let [result (patch/apply-op frag-manifest {:op "rename-cell" :from :finish :to :done-page})]
+    (is (= :done-page (get-in result [:fragments :tail :exits :done])))
+    (is (contains? (:cells result) :done-page))))
+
+(deftest rename-fragment-internal-cell-is-refused-with-pointer-test
+  (let [e (try (patch/apply-op frag-manifest {:op "rename-cell" :from :render :to :draw})
+               (catch Exception e e))]
+    (is (instance? Exception e))
+    (is (re-find #"defined by fragment :tail" (ex-message e)))))
+
+(deftest rename-to-fragment-internal-name-is-refused-test
+  (is (thrown-with-msg? Exception #"already exists"
+        (patch/apply-op frag-manifest {:op "rename-cell" :from :finish :to :render}))))
+
+;; ===== cell-refs =====
+
+(deftest cell-refs-lists-every-reference-site-test
+  (let [m (-> manifest
+              (assoc :regions {:core [:start :process]}
+                     :timeouts {:process 5000}
+                     :constraints [{:type :must-follow :if :process :then :err}]
+                     :error-groups {:main {:cells [:process] :on-error :err}}))
+        refs (patch/cell-refs m :process)
+        roles (frequencies (map :role refs))]
+    (is (= 1 (:definition roles)))
+    (is (= 1 (:edges-out roles)))
+    (is (= 1 (:edges-in roles)))
+    (is (= 1 (:dispatches roles)))
+    (is (= 1 (:region roles)))
+    (is (= 1 (:timeout roles)))
+    (is (= 1 (:constraint roles)))
+    (is (= 1 (:error-group roles)))
+    (is (every? vector? (map :path refs)))
+    ;; :err is an :on-error target for two cells plus an edge target and a group handler
+    (is (= 2 (:on-error (frequencies (map :role (patch/cell-refs m :err))))))))
+
+(deftest cell-refs-covers-fragments-test
+  (let [roles (set (map :role (patch/cell-refs frag-manifest :finish)))]
+    (is (contains? roles :fragment-exit)))
+  (let [roles (set (map :role (patch/cell-refs frag-manifest :fetch-list)))]
+    (is (contains? roles :fragment-entry))
+    (is (contains? roles :edges-in))))
+
+(deftest rename-moves-every-reference-test
+  (let [m (assoc manifest :regions {:core [:start :process]} :timeouts {:process 5000})
+        before (count (patch/cell-refs m :process))
+        result (patch/apply-op m {:op "rename-cell" :from :process :to :transform})]
+    (is (pos? before))
+    (is (empty? (patch/cell-refs result :process)))
+    (is (= before (count (patch/cell-refs result :transform))))))
+
+;; ===== op registry =====
+
+(deftest ops-registry-describes-rename-cell-test
+  (let [ops (patch/ops)]
+    (is (contains? ops "rename-cell"))
+    (is (string? (get-in ops ["rename-cell" :doc])))
+    (is (= [:from :to] (mapv :name (get-in ops ["rename-cell" :args]))))))
+
+;; ===== render: format-preserving text output =====
+
+(def formatted-text
+  ";; loan workflow
+{:id :t/render
+ :doc \"docs\"
+ :cells
+ {:start   {:id :t/a ; entry
+            :doc \"a\"
+            :schema {:input [:map] :output [:map]}
+            :on-error :err}
+  :process {:id :t/b
+            :doc \"b\"
+            :schema {:input [:map] :output [:map]}
+            :on-error :err}
+  :err     {:id :t/e :doc \"e\" :schema {:input [:map] :output [:map]} :on-error nil}}
+
+ :edges {:start :process
+         :process :err   ; done
+         :err :end}}
+")
+
+(deftest render-preserves-comments-and-layout-on-rename-test
+  (let [old (clojure.edn/read-string formatted-text)
+        new (patch/apply-op old {:op "rename-cell" :from :process :to :transform})
+        out (patch/render formatted-text old new)]
+    (is (= new (clojure.edn/read-string out)))
+    (is (str/includes? out ";; loan workflow"))
+    (is (str/includes? out "; entry"))
+    (is (str/includes? out "; done"))
+    ;; untouched cell keeps its exact layout
+    (is (str/includes? out "  :err     {:id :t/e :doc \"e\" :schema {:input [:map] :output [:map]} :on-error nil}"))
+    (is (str/includes? out ":transform {:id :t/b"))
+    (is (not (str/includes? out ":process")))))
+
+(deftest render-adds-and-removes-keys-test
+  (let [old (clojure.edn/read-string formatted-text)
+        new (-> old (assoc :regions {:core [:start]}) (dissoc :doc))
+        out (patch/render formatted-text old new)]
+    (is (= new (clojure.edn/read-string out)))
+    (is (str/includes? out ";; loan workflow"))
+    (is (not (str/includes? out ":doc \"docs\"")))
+    (is (str/includes? out ":regions"))))
+
+(deftest render-falls-back-to-pretty-print-when-text-is-not-the-old-map-test
+  (let [old {:id :t/x :cells {} :edges {}}
+        new {:id :t/y :cells {} :edges {}}
+        out (patch/render "{:id :t/unrelated}" old new)]
+    (is (= new (clojure.edn/read-string out)))))
+
+(deftest render-ignores-print-length-bindings-test
+  (let [old {:id :t/x :cells {} :edges {} :pipeline (vec (range 50))}
+        new (assoc old :pipeline (vec (range 60)))
+        out (binding [*print-length* 3 *print-level* 1]
+              (patch/render (pr-str old) old new))]
+    (is (= new (clojure.edn/read-string out)))))

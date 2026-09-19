@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# myc — mycelium agent CLI. Runs from the repo checkout; as a library
-# dependency, invoke via clojure -M -m mycelium.cli instead.
+# myc — mycelium agent CLI. Works from any directory: manifest paths are
+# relative to where you run it, and a deps.edn in the current directory (an
+# app depending on mycelium) is merged in so `--require` can load its cells.
+# As a library dependency, invoke via `clojure -M -m mycelium.cli` instead.
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$DIR"
-exec clojure -M:cli "$@"
+exec clojure -Sdeps "{:deps {io.github.yogthos/mycelium {:local/root \"$DIR\"}}}" -M -m mycelium.cli "$@"

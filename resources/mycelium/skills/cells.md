@@ -1,3 +1,7 @@
+---
+name: cells
+description: Handler contract: signature, schemas, params, isolation testing.
+---
 # Cell Authoring
 
 A cell is a pure data transformation behind a schema contract. It knows

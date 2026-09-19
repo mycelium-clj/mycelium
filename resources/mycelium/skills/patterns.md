@@ -1,3 +1,7 @@
+---
+name: patterns
+description: Branching, joins, halt/resume, fragments, constraints — when to reach for each.
+---
 # Workflow Patterns
 
 Composable shapes for common flow problems. All are plain manifest data —

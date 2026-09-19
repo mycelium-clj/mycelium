@@ -1,3 +1,7 @@
+---
+name: agent
+description: Edit loop, rules and command reference for working on a Mycelium codebase through myc.
+---
 # Mycelium Agent Skill
 
 How a coding agent works on a Mycelium codebase: the EDN manifest is the
@@ -12,13 +16,20 @@ scoped command answers the question.
    self-contained: schema, required resources, example data, dispatch labels.
    Do not read other cells' code — the contract is all a cell may know.
 3. Implement or fix the cell's handler (a `defcell`/`cell-spec` method).
-4. Verify in isolation with generated or typical inputs. Boundary inputs too:
-   empty collections, nil-able keys, zero/negative numbers.
+4. Verify in isolation: `myc test <manifest> <cell>` runs it with a generated
+   input and reports output, matched dispatch label and phase-tagged errors.
+   Then `--input '{...}'` with boundary inputs: empty collections, nil-able
+   keys, zero/negative numbers.
 5. Re-run `myc status` to confirm the cell passes; move to the next failing
    cell.
 
 Load handler namespaces first with `--require <ns>` (repeatable), otherwise
 every cell reads as `pending` because no handler is registered.
+
+For structural edits: `myc refs <manifest> <cell>` shows every site a change
+touches, `myc hash` then `myc patch --expect-hash <h> --op ...` applies it
+checked. A successful patch is already validated and written — do not run
+`myc validate` just to confirm.
 
 ## Rules {#rules}
 
@@ -33,22 +44,35 @@ every cell reads as `pending` because no handler is registered.
   edges, not imports.
 - Errors are data: set a key and let dispatch predicates route. Don't throw
   for expected failures.
+- Fetch each skill topic at most once per session; the content is fixed for
+  the installed version. `myc skills` lists topics with sizes.
+- Text output is the default. Use `--json` only when another tool must parse
+  stable fields.
 
 ## Commands {#commands}
 
 ```
-myc validate <path>            structural validation (exit 0/1)
-myc hash <path>                content hash — use with `myc patch --expect-hash`
-myc status <path> [--json]     per-cell implementation status (exit 3 unless green)
-myc brief <path> <cell>        one cell's implementation brief
-myc briefs <path>              all briefs
-myc region <path> <name>       subgraph cluster brief
-myc plan <path>                build order (cells are independent by default)
-myc paths <path>               every start-to-terminal path
-myc schema <path>              data keys available at each cell
-myc dot <path>                 DOT rendering
-myc skills get <topic> [--section <id>]
-                               this documentation, one topic or section
+myc validate <path> [--lenient]  structural validation (exit 0/1); strict like load-manifest
+myc hash <path>                  content hash — use with `myc patch --expect-hash`
+myc status <path>                per-cell implementation status (exit 3 unless green)
+myc test <path> <cell> [--input <edn>]
+                                 run one cell in isolation (exit 3 on failure)
+myc brief <path> <cell>          one cell's implementation brief
+myc briefs <path>                all briefs
+myc region <path> <name>         subgraph cluster brief
+myc refs <path> <cell>           every reference site for a cell
+myc plan <path>                  build order (cells are independent by default)
+myc paths <path>                 every start-to-terminal path
+myc schema <path>                data keys available at each cell
+myc dot <path>                   DOT rendering
+myc patch <path> --op rename-cell --from <old> --to <new> [--expect-hash <h>] [--dry-run]
+                                 checked edit, keeps comments/layout; `--op help` lists ops
+myc skills [get <topic> [--section <id>]]
+                                 this documentation, one topic or section
 ```
 
-Exit codes: 0 ok, 1 failure, 3 status-not-green, 64 usage, 66 file missing.
+Every command takes `--json` and `--require <ns>` (repeatable) anywhere in
+the arguments. Cell names may carry a leading colon (`:start`).
+
+Exit codes: 0 ok, 1 failure, 3 status-not-green / test failed, 64 usage,
+66 file missing.

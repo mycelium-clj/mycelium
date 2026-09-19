@@ -9,21 +9,39 @@ the manifest is the program database, the CLI is the agent's door into it.
 
 - `myc validate/hash/status/brief/briefs/region/plan/paths/schema/dot` —
   query commands over a manifest file; `status` exits 3 unless all cells
-  pass; `--json` on status; `--require <ns>` loads handler namespaces.
+  pass; `--require <ns>` loads handler namespaces. `validate` is strict by
+  default like `load-manifest` (`--lenient` to relax). Cell names accept a
+  leading colon, so names copied from output work as arguments.
+- `myc test <path> <cell> [--input <edn>]` — run one cell in isolation with
+  full schema validation and manifest dispatch predicates; prints output,
+  matched label and phase-tagged errors; exit 3 on failure.
+- `myc refs <path> <cell>` — every reference site for a cell (edges both
+  directions, dispatches, joins, regions, constraints, timeouts, resilience,
+  error-groups, on-error, pipeline, fragment aliases and exits).
 - `myc patch --op rename-cell --from <old> --to <new>` — checked structural
-  edit that rewrites every reference (edges, dispatches, joins, regions,
-  constraints, timeouts, error-groups, on-error, pipeline) and re-validates
-  before writing; rejected edits leave the file untouched.
-  `--expect-hash` guards against stale edits (hash from `myc hash`);
-  `--dry-run` validates without writing.
-- `myc skills get <topic> [--section <id>]` — bundled, version-matched agent
-  docs (agent/manifest/cells/testing/patterns) served from the library's
-  resources, so they can't drift from the installed version.
-- `bin/myc` launcher + `:cli` alias.
+  edit on the manifest *as written*: `:fragments`, `:pipeline` and
+  `:schema :inherit` are kept, every reference is rewritten (including
+  fragment `:as`/`:exits`), and the result is validated before writing.
+  The write preserves comments and layout — only changed entries are
+  reprinted — and is atomic. Renaming a cell that lives inside a fragment is
+  refused with a pointer to the fragment file. `--expect-hash` guards
+  against stale edits (hash from `myc hash`, over the file's own content);
+  `--dry-run` validates without writing; `myc patch --op help` lists ops.
+- `--json` on every command: `{"ok": bool, "exit": n, ...}` with the
+  command's structured fields, or `"error"` + `"data"` on failure.
+- `myc skills` lists bundled, version-matched agent docs
+  (agent/manifest/cells/testing/patterns) with sizes and descriptions;
+  `myc skills get <topic> [--section <id>]` serves one topic or section.
+- `bin/myc` launcher works from any directory (paths relative to the caller;
+  a local `deps.edn` is merged so `--require` can load app cells) + `:cli`
+  alias.
 - `load-manifest` now resolves fragment `:ref` paths relative to the manifest
   file (its directory and the directory's parent) in addition to the
   classpath — `myc validate examples/.../user-onboarding.edn` works outside
-  an app classpath.
+  an app classpath. New `manifest/expand-manifest` exposes the
+  expand-and-validate step for callers holding raw EDN.
+- New deps: `borkdude/rewrite-edn` (format-preserving patch writes),
+  `org.clojure/data.json`.
 - Docs: see `docs/cli.md`.
 
 ### Breaking: per-transition output schemas require explicit `[:per-transition ...]` wrapper
