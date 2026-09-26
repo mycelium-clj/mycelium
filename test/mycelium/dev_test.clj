@@ -1,9 +1,7 @@
 (ns mycelium.dev-test
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [mycelium.cell :as cell]
-            [mycelium.dev :as dev]
-            [mycelium.workflow :as wf]
-            [maestro.core :as fsm]))
+            [mycelium.dev :as dev]))
 
 (use-fixtures :each (fn [f] (cell/clear-registry!) (f)))
 
@@ -309,6 +307,19 @@
       (is (contains? (:no-path-to-end analysis) :dead-end))
       ;; :start does have a path to end via :skip
       (is (not (contains? (:no-path-to-end analysis) :start))))))
+
+(deftest analyze-workflow-flags-missing-start-test
+  (testing "analyze-workflow flags a workflow with no :start cell"
+    (defmethod cell/cell-spec :dev/no-start-cell [_]
+      {:id      :dev/no-start-cell
+       :handler (fn [_ data] data)
+       :schema  {:input [:map] :output [:map]}})
+    (let [analysis (dev/analyze-workflow
+                    {:cells {:entry :dev/no-start-cell}
+                     :edges {:entry :end}
+                     :dispatches {}})]
+      (is (true? (:missing-start analysis)))
+      (is (contains? (:unreachable analysis) :entry)))))
 
 ;; ===== infer-workflow-schema =====
 

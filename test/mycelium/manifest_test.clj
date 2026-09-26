@@ -1,5 +1,6 @@
 (ns mycelium.manifest-test
-  (:require [clojure.test :refer [deftest is testing use-fixtures]]
+  (:require [clojure.set :as set]
+            [clojure.test :refer [deftest is testing use-fixtures]]
             [mycelium.cell :as cell]
             [mycelium.core :as myc]
             [mycelium.manifest :as manifest]))
@@ -178,6 +179,21 @@
              :edges {:start :end}}]
       (is (some? (manifest/validate-manifest m))))))
 
+(deftest manifest-without-start-cell-names-missing-start-test
+  (testing "A manifest whose entry cell is not named :start reports the missing start cell"
+    (let [m (-> valid-manifest
+                (update :cells #(set/rename-keys % {:start :entry}))
+                (update :edges #(set/rename-keys % {:start :entry}))
+                (update :dispatches #(set/rename-keys % {:start :entry})))]
+      (is (thrown-with-msg? Exception #"[Nn]o start cell"
+            (manifest/validate-manifest m))))))
+
+(deftest validate-manifest-rejects-unexpanded-fragments-test
+  (testing "validate-manifest points callers at fragment expansion instead of a misleading unreachable error"
+    (let [m (assoc valid-manifest :fragments {:foo {:ref "some/fragment"}})]
+      (is (thrown-with-msg? Exception #"unexpanded :fragments"
+            (manifest/validate-manifest m))))))
+
 ;; ===== Bug fix: manifest join dispatch validation =====
 
 (def join-manifest
@@ -295,9 +311,11 @@
                               :schema   :inherit
                               :on-error nil}}
              :edges {:start :end}}
-          wf-def (manifest/manifest->workflow m)]
+          wf (manifest/manifest->workflow m)]
       ;; Cell should be usable
-      (is (some? (cell/get-cell :test/inherit-e2e))))))
+      (is (some? (cell/get-cell :test/inherit-e2e)))
+      ;; The :inherit schema resolves to the registered cell and carries into the workflow
+      (is (= :test/inherit-e2e (get-in wf [:cells :start]))))))
 
 ;; ===== Pipeline shorthand =====
 

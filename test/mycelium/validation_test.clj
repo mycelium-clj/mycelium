@@ -83,6 +83,24 @@
                {:start :a, :a :b, :b :c, :c :end}
                #{:start :a :b :c})))))
 
+(deftest validate-reachability-missing-start-test
+  (testing "Workflow with no :start cell names the missing start, not just unreachable cells"
+    (is (thrown-with-msg? Exception #"[Nn]o start cell"
+          (v/validate-reachability!
+           {:entry {:a :step-b, :b :end}
+            :step-b :end}
+           #{:entry :step-b}))))
+  (testing "ex-data flags the missing start and lists the defined cells"
+    (let [e (try
+              (v/validate-reachability! {:entry :end} #{:entry})
+              nil
+              (catch Exception ex ex))]
+      (is (= :start (:missing-start (ex-data e))))
+      (is (= #{:entry} (:cells (ex-data e))))))
+  (testing "the shared predicate agrees with the thrown error"
+    (is (true? (v/missing-start-cell? #{:entry :step-b})))
+    (is (false? (v/missing-start-cell? #{:start :step-b})))))
+
 ;; ===== Dispatch coverage =====
 
 (deftest validate-dispatch-coverage-valid-test
