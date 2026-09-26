@@ -102,9 +102,28 @@
 
 ;; ===== Reachability =====
 
+(defn missing-start-cell?
+  "True when `cell-names` contains no `:start` cell. Reachability and the
+   workflow FSM are both BFS-rooted at `:start`, so its absence is a distinct
+   failure from an ordinary unreachable cell — every cell reads as unreachable,
+   which buries the real cause. Shared by `validate-reachability!` and
+   `mycelium.dev/analyze-workflow` so both surfaces agree."
+  [cell-names]
+  (not (contains? (set cell-names) :start)))
+
 (defn validate-reachability!
-  "BFS from :start, checks all cells in `cell-names` are reachable via `edges-map`."
+  "BFS from :start, checks all cells in `cell-names` are reachable via `edges-map`.
+   Throws a dedicated error when the workflow defines no `:start` cell — without
+   it every cell is unreachable, and the generic `Unreachable cells: #{...}`
+   message buries the real cause."
   [edges-map cell-names]
+  (when (missing-start-cell? cell-names)
+    (throw (ex-info (str "No start cell: reachability is BFS-rooted at :start, but "
+                         "the workflow defines no cell named :start. Defined cells: "
+                         (sort cell-names) ". Rename your entry cell to :start, or "
+                         "add a cell named :start.")
+                    {:missing-start :start
+                     :cells         (set cell-names)})))
   (let [adjacency (into {}
                         (map (fn [[from edge-def]]
                                [from (if (keyword? edge-def)

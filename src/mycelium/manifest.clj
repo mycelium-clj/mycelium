@@ -130,6 +130,11 @@
   ([manifest] (validate-manifest manifest {}))
   ([manifest opts]
    (let [{:keys [id cells edges dispatches joins] :as manifest} (expand-pipeline manifest)]
+      (when (seq (:fragments manifest))
+        (throw (ex-info (str "Manifest has unexpanded :fragments " (vec (keys (:fragments manifest)))
+                             " — call fragment/expand-all-fragments (or load-manifest) before validate-manifest; "
+                             "validation does not expand fragments, which can cause a misleading unreachable-cell error.")
+                        {:id id :fragments (keys (:fragments manifest))})))
      (when-not id
        (throw (ex-info "Manifest missing :id" {:manifest manifest})))
      (when-not cells

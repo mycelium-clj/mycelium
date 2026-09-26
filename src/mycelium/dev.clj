@@ -7,6 +7,7 @@
             [malli.provider :as mp]
             [mycelium.cell :as cell]
             [mycelium.schema :as schema]
+            [mycelium.validation :as v]
             [mycelium.workflow :as wf]
             [maestro.core :as fsm]))
 
@@ -85,7 +86,7 @@
   "Enumerates all paths from :start to terminal states in a manifest.
    Join nodes are treated as single steps (their internal members are not expanded).
    Returns seq of paths, each a vector of {:cell :transition :target} (with optional :join? true)."
-  [{:keys [cells edges joins]}]
+  [{:keys [edges joins]}]
   (let [terminal?  #{:end :error :halt}
         join-names (set (keys (or joins {})))]
     (loop [queue [[:start [] #{}]]
@@ -221,7 +222,7 @@
    Returns {:reachable #{...} :unreachable #{...} :no-path-to-end #{...} :cycles [...]}
    with state IDs reverse-resolved to cell name keywords for readability.
    Join-aware: join names appear as regular states, join members are excluded."
-  [{:keys [cells edges dispatches joins] :as workflow-def}]
+  [{:keys [cells edges dispatches joins]}]
   (let [joins-map (or joins {})
         join-members (set (mapcat :cells (vals joins-map)))
         ;; Build state->names for reverse resolution
@@ -289,10 +290,12 @@
         fsm-states (merge fsm-cell-states fsm-join-states)
         spec     {:fsm fsm-states}
         analysis (fsm/analyze spec)]
-    {:reachable      (set (map resolve-name (:reachable analysis)))
-     :unreachable    (set (map resolve-name (:unreachable analysis)))
-     :no-path-to-end (set (map resolve-name (:no-path-to-end analysis)))
-     :cycles         (mapv (fn [cycle] (mapv resolve-name cycle)) (:cycles analysis))}))
+    (cond-> {:reachable      (set (map resolve-name (:reachable analysis)))
+             :unreachable    (set (map resolve-name (:unreachable analysis)))
+             :no-path-to-end (set (map resolve-name (:no-path-to-end analysis)))
+             :cycles         (mapv (fn [cycle] (mapv resolve-name cycle)) (:cycles analysis))}
+      ;; Every cell reads as unreachable when no :start exists — surface the cause.
+      (v/missing-start-cell? (keys cells)) (assoc :missing-start true))))
 
 (defn- get-map-keys
   "Extracts top-level key names from a resolved Malli schema.
@@ -375,22 +378,22 @@
                            (join-output-keys join-def cells opts)
                            (let [cell-id (get cells cell-name)]
                              (cell-output-keys cell-id opts)))
-                    after (set/union merged-avail adds)]
+                    after       (set/union merged-avail adds)
+                    prev-record (get @result cell-name)]
                 ;; Record if first visit or if available-before expanded
-                (let [prev-record (get @result cell-name)]
-                  (when (or (nil? prev-record)
-                            (not= merged-avail (:available-before prev-record)))
-                    (swap! result assoc cell-name
-                           {:available-before merged-avail
-                            :adds            adds
-                            :available-after  after})
-                    ;; Traverse edges
-                    (let [edge-def (get edges cell-name)]
-                      (if (keyword? edge-def)
-                        (swap! queue conj [edge-def after])
-                        (when (map? edge-def)
-                          (doseq [[_ target] edge-def]
-                            (swap! queue conj [target after])))))))))))
+                (when (or (nil? prev-record)
+                          (not= merged-avail (:available-before prev-record)))
+                  (swap! result assoc cell-name
+                         {:available-before merged-avail
+                          :adds            adds
+                          :available-after  after})
+                  ;; Traverse edges
+                  (let [edge-def (get edges cell-name)]
+                    (if (keyword? edge-def)
+                      (swap! queue conj [edge-def after])
+                      (when (map? edge-def)
+                        (doseq [[_ target] edge-def]
+                          (swap! queue conj [target after]))))))))))
         (recur)))
      @result)))
 
@@ -438,7 +441,6 @@
   (str/join "\n\n"
             (map (fn [[cell-name cell-entry]]
                    (let [{:keys [cell-id schema doc requires]} (resolve-cell-info cell-entry)
-                         has-schema? (some? schema)
                          input-schema (:input schema)
                          output-schema (:output schema)
                          doc-str (or doc (str "TODO: document " cell-id))

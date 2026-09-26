@@ -162,6 +162,27 @@ opts map without `:strict?` silently ran in lenient mode, so
 default now applies whenever `:strict?` is absent. Pass `{:strict? false}`
 explicitly for the lenient behavior.
 
+### Fix: explicit error when a workflow has no `:start` cell
+
+Reachability is BFS-rooted at `:start`, so a workflow whose entry cell is
+named anything else reported every cell as `Unreachable cells: #{...}` —
+which buries the real cause. `validate-reachability!` now throws
+`No start cell: ...` (ex-data `{:missing-start :start, :cells #{...}}`)
+before the BFS runs, naming the missing cell and listing the cells that do
+exist. This covers `validate-manifest` and `compile-workflow` alike.
+`dev/analyze-workflow` (and `mycelium/analyze-workflow`) gain a
+`:missing-start true` key in the same situation instead of leaving the
+caller to infer it from an all-unreachable report.
+
+### Fix: `validate-manifest` names the unexpanded `:fragments` mistake
+
+`validate-manifest` does not expand `:fragments`, so handing it a raw
+manifest that uses them validated the pre-expansion cells and edges and
+could report a misleading `Unreachable cells` error. It now throws
+`Manifest has unexpanded :fragments [...]` (ex-data
+`{:id ..., :fragments [...]}`) pointing at `fragment/expand-all-fragments`
+(or `load-manifest`, which expands first).
+
 ## 2026-03-07
 
 ### Unified Error Inspection

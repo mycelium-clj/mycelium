@@ -121,6 +121,17 @@
                                   [:failure (fn [d] (not (:a-done d)))]]
                          :step-b [[:success (constantly true)]]}})))))
 
+(deftest validate-catches-missing-start-cell-test
+  (testing "Validate names the missing :start cell instead of listing every cell unreachable"
+    (register-cells!)
+    (is (thrown-with-msg? Exception #"[Nn]o start cell"
+          (wf/compile-workflow
+           {:cells {:entry  :test/cell-a
+                    :step-b :test/cell-b}
+            :edges {:entry  :step-b
+                    :step-b :end}
+            :dispatches {}})))))
+
 ;; ===== Validation: missing dispatch for edge =====
 
 (deftest validate-catches-missing-dispatch-test
