@@ -1,7 +1,7 @@
 {:paths ["src" "resources"]
  :deps  {org.clojure/clojure {:mvn/version "1.12.0"}
-         io.github.yogthos/maestro {:git/url "https://github.com/yogthos/maestro"
-                                    :git/sha "fc4b684a380700a693ee9502674e354835864960"}
+         io.github.yogthos/maestro {:git/url "https://github.com/mycelium-clj/maestro"
+                                    :git/sha "279b7284cf10ddaa84c70f4b8878be73114b1622"}
          metosin/malli       {:mvn/version "0.17.0"}
          org.clojure/data.json {:mvn/version "2.5.1"}
          rewrite-clj/rewrite-clj {:mvn/version "1.2.57"}

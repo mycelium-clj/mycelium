@@ -4,7 +4,7 @@
 
 ## What It Is
 
-Mycelium is a Clojure workflow framework built on [Maestro](https://github.com/yogthos/maestro). Applications are directed graphs of **cells** (pure data transformations) with Malli schema contracts on every input/output boundary. Cells are developed and tested in isolation, then composed into workflows validated at compile time.
+Mycelium is a Clojure workflow framework built on [Maestro](https://github.com/mycelium-clj/maestro). Applications are directed graphs of **cells** (pure data transformations) with Malli schema contracts on every input/output boundary. Cells are developed and tested in isolation, then composed into workflows validated at compile time.
 
 **Key namespace:** `mycelium.core` (aliased as `myc`) — re-exports all public API functions.
 

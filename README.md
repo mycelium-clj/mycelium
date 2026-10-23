@@ -2,7 +2,7 @@
 
 [![Tests](https://github.com/yogthos/mycelium/actions/workflows/test.yml/badge.svg)](https://github.com/yogthos/mycelium/actions/workflows/test.yml)
 
-Schema-enforced, composable workflow components for Clojure. Built on [Maestro](https://github.com/yogthos/maestro).
+Schema-enforced, composable workflow components for Clojure. Built on [Maestro](https://github.com/mycelium-clj/maestro).
 
 Mycelium structures applications as directed graphs of pure data transformations. Each node (cell) has explicit input/output schemas. Cells are developed and tested in complete isolation, then composed into workflows that are validated at compile time. Routing between cells is determined by dispatch predicates defined at the workflow level — handlers compute data, the graph decides where it goes.
 
@@ -1019,4 +1019,6 @@ mycelium/
 
 ## License
 
-Copyright (c) Dmitri Sotnikov. All rights reserved.
+Copyright (c) Dmitri Sotnikov.
+
+Distributed under the [MIT License](LICENSE).
